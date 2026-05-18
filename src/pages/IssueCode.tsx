@@ -65,12 +65,6 @@ export function IssueCode() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-xl font-bold text-gray-900">ออกโค้ด</h1>
-        <p className="text-sm text-gray-500 mt-0.5">เลือกประเภทและจำนวนโค้ดที่ต้องการ</p>
-      </div>
-
       {/* Category selection */}
       <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
         <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">
