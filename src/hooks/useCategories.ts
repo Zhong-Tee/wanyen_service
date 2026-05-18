@@ -64,6 +64,18 @@ export function useCategories() {
     return { error: null }
   }
 
+  const updateCategoryName = async (id: string, name: string): Promise<{ error: string | null }> => {
+    const trimmed = name.trim().toUpperCase()
+    if (!trimmed) return { error: 'กรุณากรอกชื่อ' }
+    const { error: err } = await supabase.from('code_categories').update({ name: trimmed }).eq('id', id)
+    if (err) {
+      if (err.code === '23505') return { error: `"${trimmed}" มีอยู่แล้ว` }
+      return { error: err.message }
+    }
+    await fetchCategories()
+    return { error: null }
+  }
+
   const deleteCategory = async (id: string): Promise<{ error: string | null }> => {
     const { error: err } = await supabase
       .from('code_categories')
@@ -82,6 +94,7 @@ export function useCategories() {
     error,
     refetch: fetchCategories,
     createCategory,
+    updateCategoryName,
     updateCategoryTemplate,
     deleteCategory,
   }

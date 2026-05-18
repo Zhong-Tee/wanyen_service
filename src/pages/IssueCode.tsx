@@ -90,7 +90,7 @@ export function IssueCode() {
                 onClick={() => handleCategorySelect(cat)}
                 className={`px-5 py-2.5 rounded-xl font-semibold text-sm transition-all active:scale-95
                   ${selectedCategory?.id === cat.id
-                    ? 'bg-violet-600 text-white shadow-md shadow-violet-200 scale-105'
+                    ? 'bg-pink-600 text-white shadow-md shadow-pink-200 scale-105'
                     : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                   }`}
               >
@@ -103,18 +103,18 @@ export function IssueCode() {
 
       {/* Remaining count */}
       {selectedCategory && (
-        <section className="bg-gradient-to-br from-violet-50 to-purple-50 rounded-2xl border border-violet-100 p-5">
+        <section className="bg-gradient-to-br from-pink-50 to-purple-50 rounded-2xl border border-pink-100 p-5">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-sm text-violet-600 font-medium">
+              <p className="text-sm text-pink-600 font-medium">
                 โค้ดคงเหลือ · {selectedCategory.name}
               </p>
               {countLoading ? (
-                <div className="h-8 w-16 bg-violet-100 rounded-lg animate-pulse mt-1" />
+                <div className="h-8 w-16 bg-pink-100 rounded-lg animate-pulse mt-1" />
               ) : (
-                <p className="text-3xl font-bold text-violet-700 mt-0.5">
+                <p className="text-3xl font-bold text-pink-700 mt-0.5">
                   {count ?? 0}
-                  <span className="text-base font-normal text-violet-500 ml-1">โค้ด</span>
+                  <span className="text-base font-normal text-pink-500 ml-1">โค้ด</span>
                 </p>
               )}
             </div>
@@ -140,7 +140,7 @@ export function IssueCode() {
               onClick={() => setQuantity(n)}
               className={`aspect-square rounded-xl font-bold text-base transition-all active:scale-95
                 ${quantity === n
-                  ? 'bg-violet-600 text-white shadow-md shadow-violet-200'
+                  ? 'bg-pink-600 text-white shadow-md shadow-pink-200'
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                 }`}
             >
@@ -162,7 +162,7 @@ export function IssueCode() {
           <button
             onClick={toggleSuffix}
             className={`relative w-12 h-6 rounded-full transition-colors focus:outline-none
-              ${showSuffix ? 'bg-violet-600' : 'bg-gray-300'}`}
+              ${showSuffix ? 'bg-pink-600' : 'bg-gray-300'}`}
             aria-label="toggle suffix"
           >
             <span
@@ -180,7 +180,7 @@ export function IssueCode() {
         className={`w-full py-4 rounded-2xl font-bold text-lg transition-all active:scale-[0.98] flex items-center justify-center gap-2
           ${copying || !selectedCategory || count === 0
             ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-            : 'bg-gradient-to-r from-violet-600 to-purple-600 text-white shadow-lg shadow-violet-200 hover:shadow-violet-300'
+            : 'bg-gradient-to-r from-pink-600 to-purple-600 text-white shadow-lg shadow-pink-200 hover:shadow-pink-300'
           }`}
       >
         {copying ? (
