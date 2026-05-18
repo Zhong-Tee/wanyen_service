@@ -3,6 +3,7 @@ import { useCategories } from '../hooks/useCategories'
 import { useImportCodes } from '../hooks/useCodes'
 import { useBranches } from '../hooks/useBranches'
 import { useProducts } from '../hooks/useProducts'
+import { useStockReport } from '../hooks/useStockReport'
 import { parseExcelCodes } from '../lib/excel'
 import type { ExcelCodeEntry } from '../lib/excel'
 import { DEFAULT_TEMPLATE } from '../lib/template'
@@ -626,7 +627,27 @@ function BranchesTab() {
 
 function ProductsTab() {
   const { products, loading, createProduct, updateProduct, deleteProduct } = useProducts()
+  const { storeGroups } = useBranches()
+  const { data: stockData } = useStockReport()
   const [productSearch, setProductSearch] = useState('')
+  const [filterGroupId, setFilterGroupId] = useState('')
+
+  // Products that appear in stock for a given store group
+  const filteredProducts = useMemo(() => {
+    let list = products
+    if (filterGroupId) {
+      const productIdsInGroup = new Set(
+        stockData
+          .filter((s) => s.branch?.store_group?.id === filterGroupId || s.branch?.store_group_id === filterGroupId)
+          .map((s) => s.product_id)
+      )
+      list = list.filter((p) => productIdsInGroup.has(p.id))
+    }
+    if (productSearch.trim()) {
+      list = list.filter((p) => p.name.toLowerCase().includes(productSearch.toLowerCase()))
+    }
+    return list
+  }, [products, productSearch, filterGroupId, stockData])
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [imageFile, setImageFile] = useState<File | null>(null)
@@ -720,8 +741,37 @@ function ProductsTab() {
 
       <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">สินค้าทั้งหมด ({products.length})</h2>
+          <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">
+            สินค้าทั้งหมด ({filteredProducts.length}{filterGroupId ? `/${products.length}` : ''})
+          </h2>
         </div>
+
+        {/* Store group filter */}
+        <div className="flex gap-2 flex-wrap mb-3">
+          <button onClick={() => setFilterGroupId('')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all
+              ${!filterGroupId ? 'bg-pink-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+            ทั้งหมด
+            <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${!filterGroupId ? 'bg-white/30 text-white' : 'bg-gray-200 text-gray-500'}`}>{products.length}</span>
+          </button>
+          {storeGroups.map((sg) => {
+            const count = new Set(
+              stockData
+                .filter((s) => s.branch?.store_group?.id === sg.id || s.branch?.store_group_id === sg.id)
+                .map((s) => s.product_id)
+            ).size
+            return (
+              <button key={sg.id} onClick={() => setFilterGroupId(sg.id === filterGroupId ? '' : sg.id)}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all
+                  ${filterGroupId === sg.id ? 'bg-pink-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                {sg.name}
+                <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${filterGroupId === sg.id ? 'bg-white/30 text-white' : 'bg-gray-200 text-gray-500'}`}>{count}</span>
+              </button>
+            )
+          })}
+        </div>
+
+        {/* Search */}
         <div className="relative mb-3">
           <input
             type="text" value={productSearch} onChange={(e) => setProductSearch(e.target.value)}
@@ -732,13 +782,14 @@ function ProductsTab() {
             <button onClick={() => setProductSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 w-5 h-5 flex items-center justify-center rounded-full hover:bg-gray-100 text-xs">✕</button>
           )}
         </div>
+
         {loading ? (
           <div className="grid grid-cols-2 gap-3">{[1, 2, 3, 4].map((i) => <div key={i} className="h-32 bg-gray-100 rounded-xl animate-pulse" />)}</div>
-        ) : products.length === 0 ? (
-          <div className="text-center py-8 text-gray-400"><p className="text-3xl mb-2">📦</p><p className="text-sm">ยังไม่มีสินค้า</p></div>
+        ) : filteredProducts.length === 0 ? (
+          <div className="text-center py-8 text-gray-400"><p className="text-3xl mb-2">📦</p><p className="text-sm">{filterGroupId ? 'ไม่มีสินค้าในประเภทร้านนี้' : 'ยังไม่มีสินค้า'}</p></div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {products.filter(p => !productSearch.trim() || p.name.toLowerCase().includes(productSearch.toLowerCase())).map((p) => (
+            {filteredProducts.map((p) => (
               <div key={p.id} className="bg-gray-50 rounded-xl border border-gray-100 overflow-hidden">
                 {p.image_url ? (
                   <ZoomImage src={p.image_url} alt={p.name} className="w-full aspect-square object-cover" />
