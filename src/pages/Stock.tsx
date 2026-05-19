@@ -50,7 +50,7 @@ export function Stock() {
       return
     }
     setConfirmDeleteId(null)
-    const finalQty = newStatus === 'เก็บ' ? (qty ?? parseInt(quantityInputs[item.id] ?? String(item.quantity))) : item.quantity
+    const finalQty = qty !== undefined ? qty : item.quantity
     setUpdatingId(item.id)
     const { error } = await setStatus(item.id, newStatus, finalQty)
     setUpdatingId(null)
@@ -289,7 +289,8 @@ function StockCard({ item, updatingId, confirmDeleteId, quantityInputs, onSetSta
   }
 
   const handleSaveQty = () => {
-    onSetStatus(item, 'เก็บ', parseInt(quantityInputs[item.id] ?? String(item.quantity)))
+    const qty = parseInt(quantityInputs[item.id] ?? String(item.quantity))
+    if (!isNaN(qty) && qty >= 0) onSetStatus(item, item.status, qty)
     setShowQtyInput(false)
   }
 
@@ -320,10 +321,16 @@ function StockCard({ item, updatingId, confirmDeleteId, quantityInputs, onSetSta
                 {item.status}
               </span>
             </div>
-            <div className="text-right flex-shrink-0">
+            <button
+              onClick={() => { setShowQtyInput(true); onQuantityChange(item.id, String(item.quantity)) }}
+              disabled={isUpdating}
+              className="text-right flex-shrink-0 group hover:bg-pink-50 rounded-lg px-2 py-1 transition-colors disabled:opacity-50">
               <p className="text-xs text-gray-400">จำนวน(แผ่น)</p>
-              <p className="font-bold text-gray-800">{item.quantity}</p>
-            </div>
+              <div className="flex items-center justify-end gap-1">
+                <p className="font-bold text-gray-800">{item.quantity}</p>
+                <span className="text-gray-300 group-hover:text-pink-400 text-xs transition-colors">✏️</span>
+              </div>
+            </button>
           </div>
 
           {updatedDate && (
@@ -364,11 +371,11 @@ function StockCard({ item, updatingId, confirmDeleteId, quantityInputs, onSetSta
                   disabled:opacity-50`}>
                 {isUpdating ? '...' : '✅ กำลังใช้'}
               </button>
-              <button onClick={() => setShowQtyInput(true)} disabled={isUpdating}
+              <button onClick={() => onSetStatus(item, 'เก็บ')} disabled={isUpdating || item.status === 'เก็บ'}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all active:scale-95 border
-                  ${item.status === 'เก็บ' ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-blue-50 text-blue-600 hover:bg-blue-100 border-blue-200'}
+                  ${item.status === 'เก็บ' ? 'bg-blue-100 text-blue-700 border-blue-200 cursor-default' : 'bg-blue-50 text-blue-600 hover:bg-blue-100 border-blue-200'}
                   disabled:opacity-50`}>
-                📦 เก็บ
+                {isUpdating ? '...' : '📦 เก็บ'}
               </button>
               <button onClick={() => onSetStatus(item, 'หมด')} disabled={isUpdating}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-50 text-red-500 hover:bg-red-100 border border-red-200 transition-all active:scale-95 disabled:opacity-50">
