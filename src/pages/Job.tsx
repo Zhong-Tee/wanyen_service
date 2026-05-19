@@ -30,7 +30,9 @@ function AgeBadge({ days }: { days: number }) {
 function formatDateRange(createdAt: string, completedAt: string | null): string {
   const start = new Date(createdAt)
   const end = completedAt ? new Date(completedAt) : new Date()
-  const diffDays = Math.floor((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+  const startDay = new Date(start.getFullYear(), start.getMonth(), start.getDate())
+  const endDay = new Date(end.getFullYear(), end.getMonth(), end.getDate())
+  const diffDays = Math.round((endDay.getTime() - startDay.getTime()) / (1000 * 60 * 60 * 24))
   const fmt = (d: Date) => d.toLocaleDateString('th-TH', { day: '2-digit', month: 'short', year: '2-digit' })
   return `${fmt(start)} → ${completedAt ? fmt(end) : 'ปัจจุบัน'} (${diffDays} วัน)`
 }

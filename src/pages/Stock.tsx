@@ -19,7 +19,7 @@ export function Stock() {
   const [updatingId, setUpdatingId] = useState<string | null>(null)
   const [showAddProduct, setShowAddProduct] = useState(false)
   const [addingProductId, setAddingProductId] = useState<string>('')
-  const [addingQty, setAddingQty] = useState<string>('0')
+  const [addingQty, setAddingQty] = useState<string>('320')
   const [modalProductSearch, setModalProductSearch] = useState<string>('')
   const [zoomImage, setZoomImage] = useState<string | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
@@ -70,7 +70,7 @@ export function Stock() {
     if (error) showToast(`เพิ่มสินค้าไม่ได้: ${error}`, 'error')
     else {
       showToast('เพิ่มสินค้าเข้า Stock แล้ว', 'success')
-      setShowAddProduct(false); setAddingProductId(''); setAddingQty('0'); setModalProductSearch('')
+      setShowAddProduct(false); setAddingProductId(''); setAddingQty('320'); setModalProductSearch('')
       fetchByBranch(selectedBranch)
     }
   }
@@ -245,7 +245,7 @@ export function Stock() {
             </div>
 
             <div className="flex gap-2">
-              <button onClick={() => { setShowAddProduct(false); setAddingProductId(''); setAddingQty('0'); setModalProductSearch('') }}
+              <button onClick={() => { setShowAddProduct(false); setAddingProductId(''); setAddingQty('320'); setModalProductSearch('') }}
                 className="flex-1 py-3 rounded-xl border border-gray-200 text-gray-600 font-medium hover:bg-gray-50">ยกเลิก</button>
               <button onClick={handleAddProduct} disabled={!addingProductId}
                 className="flex-1 py-3 rounded-xl bg-pink-600 text-white font-bold disabled:opacity-50 hover:bg-pink-700 active:scale-95">เพิ่ม</button>
