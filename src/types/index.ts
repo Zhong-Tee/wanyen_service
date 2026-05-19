@@ -49,6 +49,7 @@ export interface Branch {
   name: string
   address: string | null
   phone: string | null
+  is_active: boolean
   created_at: string
   store_group?: StoreGroup
 }

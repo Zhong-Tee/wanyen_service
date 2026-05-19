@@ -5,8 +5,10 @@ import { useProducts } from '../hooks/useProducts'
 import { showToast } from '../components/Toast'
 import type { StoreGroup, BranchStock, StockStatus } from '../types'
 
+const STATUS_PRIORITY: Record<StockStatus, number> = { 'กำลังใช้': 0, 'เก็บ': 1, 'หมด': 2 }
+
 export function Stock() {
-  const { storeGroups, branches, loading: branchLoading } = useBranches()
+  const { storeGroups, activeBranches: branches, loading: branchLoading } = useBranches()
   const { products } = useProducts()
   const { stock, loading: stockLoading, fetchByBranch, setStatus, addProductToBranch } = useStock()
 
@@ -31,9 +33,11 @@ export function Stock() {
   )
 
   const filteredStock = useMemo(() =>
-    stock.filter((s) =>
-      productSearch.trim() === '' || (s.product?.name ?? '').toLowerCase().includes(productSearch.toLowerCase())
-    ),
+    stock
+      .filter((s) =>
+        productSearch.trim() === '' || (s.product?.name ?? '').toLowerCase().includes(productSearch.toLowerCase())
+      )
+      .sort((a, b) => STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status]),
     [stock, productSearch]
   )
 

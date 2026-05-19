@@ -6,7 +6,7 @@ import { ZoomImage } from '../components/ZoomImage'
 import type { StoreGroup } from '../types'
 
 export function Catalog() {
-  const { storeGroups, branches, loading: branchLoading } = useBranches()
+  const { storeGroups, activeBranches: branches, loading: branchLoading } = useBranches()
   const { stock, loading: stockLoading, fetchActiveByBranch } = useStock()
   const { data: allStock } = useStockReport()
 

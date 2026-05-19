@@ -307,7 +307,7 @@ function GeneralTab() {
 // ── Store Groups Tab ──────────────────────────────────────────────────────────
 
 function StoreGroupsTab() {
-  const { storeGroups, loading, createStoreGroup, deleteStoreGroup } = useBranches()
+  const { storeGroups, loading, createStoreGroup, updateStoreGroup, deleteStoreGroup } = useBranches()
   const [name, setName] = useState('')
   const [creating, setCreating] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -317,8 +317,6 @@ function StoreGroupsTab() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editName, setEditName] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
-  const { updateBranch: _unused } = useBranches() // get updateStoreGroup
-  const supabaseRef = useRef<typeof import('../lib/supabase').supabase | null>(null)
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -333,19 +331,10 @@ function StoreGroupsTab() {
   const handleSaveEdit = async () => {
     if (!editingId || !editName.trim()) return
     setSavingEdit(true)
-    // Import supabase directly for this operation
-    const { supabase } = await import('../lib/supabase')
-    supabaseRef.current = supabase
-    const trimmed = editName.trim().toUpperCase()
-    const { error } = await supabase.from('store_groups').update({ name: trimmed }).eq('id', editingId)
+    const { error } = await updateStoreGroup(editingId, editName)
     setSavingEdit(false)
-    if (error) showToast(`แก้ไขไม่ได้: ${error.message}`, 'error')
-    else {
-      showToast('แก้ไขชื่อสำเร็จ', 'success')
-      setEditingId(null)
-      // Trigger re-fetch by calling createStoreGroup with same name hack — just reload
-      window.location.reload()
-    }
+    if (error) showToast(`แก้ไขไม่ได้: ${error}`, 'error')
+    else { showToast('แก้ไขชื่อสำเร็จ', 'success'); setEditingId(null) }
   }
 
   const handleDelete = async (sg: StoreGroup) => {
@@ -422,7 +411,7 @@ function StoreGroupsTab() {
 // ── Branches Tab ──────────────────────────────────────────────────────────────
 
 function BranchesTab() {
-  const { storeGroups, branches, loading, createBranch, updateBranch, deleteBranch } = useBranches()
+  const { storeGroups, branches, loading, createBranch, updateBranch, toggleBranch, deleteBranch } = useBranches()
   const [filterGroupId, setFilterGroupId] = useState('')
   const [searchText, setSearchText] = useState('')
   const [selectedGroupId, setSelectedGroupId] = useState('')
@@ -432,12 +421,14 @@ function BranchesTab() {
   const [creating, setCreating] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [confirmId, setConfirmId] = useState<string | null>(null)
+  const [togglingId, setTogglingId] = useState<string | null>(null)
 
   // Edit branch
   const [editingBranch, setEditingBranch] = useState<Branch | null>(null)
   const [editName, setEditName] = useState('')
   const [editAddress, setEditAddress] = useState('')
   const [editPhone, setEditPhone] = useState('')
+  const [editStoreGroupId, setEditStoreGroupId] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
 
   const filteredBranches = useMemo(() => {
@@ -459,13 +450,22 @@ function BranchesTab() {
   }
 
   const openEdit = (b: Branch) => {
-    setEditingBranch(b); setEditName(b.name); setEditAddress(b.address ?? ''); setEditPhone(b.phone ?? '')
+    setEditingBranch(b)
+    setEditName(b.name)
+    setEditAddress(b.address ?? '')
+    setEditPhone(b.phone ?? '')
+    setEditStoreGroupId(b.store_group_id)
   }
 
   const handleSaveEdit = async () => {
-    if (!editingBranch || !editName.trim()) return
+    if (!editingBranch || !editName.trim() || !editStoreGroupId) return
     setSavingEdit(true)
-    const { error } = await updateBranch(editingBranch.id, { name: editName.trim(), address: editAddress.trim() || undefined, phone: editPhone.trim() || undefined })
+    const { error } = await updateBranch(editingBranch.id, {
+      name: editName.trim(),
+      address: editAddress.trim() || undefined,
+      phone: editPhone.trim() || undefined,
+      store_group_id: editStoreGroupId,
+    })
     setSavingEdit(false)
     if (error) showToast(`แก้ไขไม่ได้: ${error}`, 'error')
     else { showToast('แก้ไขสาขาสำเร็จ', 'success'); setEditingBranch(null) }
@@ -478,6 +478,14 @@ function BranchesTab() {
     setDeletingId(null)
     if (error) showToast(`ลบไม่ได้: ${error}`, 'error')
     else showToast(`ลบสาขา "${b.name}" สำเร็จ`, 'success')
+  }
+
+  const handleToggle = async (b: Branch) => {
+    setTogglingId(b.id)
+    const { error } = await toggleBranch(b.id, !b.is_active)
+    setTogglingId(null)
+    if (error) showToast(`เปลี่ยนสถานะไม่ได้: ${error}`, 'error')
+    else showToast(b.is_active ? `ปิดสาขา "${b.name}" แล้ว` : `เปิดสาขา "${b.name}" แล้ว`, 'success')
   }
 
   return (
@@ -554,14 +562,17 @@ function BranchesTab() {
         ) : (
           <div className="space-y-2">
             {filteredBranches.map((b) => (
-              <div key={b.id} className="p-3 rounded-xl bg-gray-50 border border-gray-100">
+              <div key={b.id} className={`p-3 rounded-xl border transition-colors ${b.is_active ? 'bg-gray-50 border-gray-100' : 'bg-gray-50/50 border-gray-200 opacity-60'}`}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       {b.store_group && (
                         <span className="text-xs font-semibold bg-pink-100 text-pink-600 px-1.5 py-0.5 rounded">{b.store_group.name}</span>
                       )}
-                      <p className="font-medium text-gray-800 text-sm">{b.name}</p>
+                      <p className={`font-medium text-sm ${b.is_active ? 'text-gray-800' : 'text-gray-400'}`}>{b.name}</p>
+                      {!b.is_active && (
+                        <span className="text-xs font-semibold bg-gray-200 text-gray-500 px-1.5 py-0.5 rounded">ปิด</span>
+                      )}
                     </div>
                     {b.address && <p className="text-xs text-gray-400 mt-0.5 line-clamp-1">{b.address}</p>}
                     {b.phone && (
@@ -571,6 +582,13 @@ function BranchesTab() {
                     )}
                   </div>
                   <div className="flex gap-1.5 flex-shrink-0">
+                    <button onClick={() => handleToggle(b)} disabled={togglingId === b.id}
+                      className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all active:scale-95 disabled:opacity-50
+                        ${b.is_active
+                          ? 'bg-green-50 text-green-600 hover:bg-green-100 border border-green-200'
+                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200 border border-gray-200'}`}>
+                      {togglingId === b.id ? '...' : b.is_active ? '🟢 เปิด' : '⭕ ปิด'}
+                    </button>
                     <button onClick={() => openEdit(b)}
                       className="px-2.5 py-1.5 rounded-lg text-xs font-medium bg-blue-50 text-blue-600 hover:bg-blue-100 active:scale-95">✏️</button>
                     <button onClick={() => handleDelete(b)} disabled={deletingId === b.id}
@@ -593,6 +611,14 @@ function BranchesTab() {
             <h3 className="font-bold text-gray-900 text-lg">✏️ แก้ไขสาขา</h3>
             <div className="space-y-3">
               <div>
+                <label className="text-xs font-medium text-gray-500 mb-1 block">ประเภทร้าน *</label>
+                <select value={editStoreGroupId} onChange={(e) => setEditStoreGroupId(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400 bg-white" required>
+                  <option value="">— เลือกประเภทร้าน —</option>
+                  {storeGroups.map((sg) => <option key={sg.id} value={sg.id}>{sg.name}</option>)}
+                </select>
+              </div>
+              <div>
                 <label className="text-xs font-medium text-gray-500 mb-1 block">ชื่อสาขา *</label>
                 <input type="text" value={editName} onChange={(e) => setEditName(e.target.value)} maxLength={50}
                   className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400" />
@@ -611,7 +637,7 @@ function BranchesTab() {
             <div className="flex gap-2">
               <button onClick={() => setEditingBranch(null)}
                 className="flex-1 py-3 rounded-xl border border-gray-200 text-gray-600 font-medium hover:bg-gray-50">ยกเลิก</button>
-              <button onClick={handleSaveEdit} disabled={savingEdit || !editName.trim()}
+              <button onClick={handleSaveEdit} disabled={savingEdit || !editName.trim() || !editStoreGroupId}
                 className="flex-1 py-3 rounded-xl bg-pink-600 text-white font-bold disabled:opacity-50 hover:bg-pink-700 active:scale-95">
                 {savingEdit ? 'กำลังบันทึก...' : '💾 บันทึก'}
               </button>

@@ -31,7 +31,7 @@ interface DeliveryPageProps {
 
 export function DeliveryPage({ onAction }: DeliveryPageProps) {
   const { deliveries, loading, createDelivery, updateStatus, updateTracking } = useDeliveries()
-  const { branches } = useBranches()
+  const { activeBranches: branches } = useBranches()
   const { products } = useProducts()
 
   const [showForm, setShowForm] = useState(false)
@@ -323,6 +323,10 @@ interface DeliveryCardProps {
   nextStatus: Record<DeliveryStatus, DeliveryStatus | null>
 }
 
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleDateString('th-TH', { day: '2-digit', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
 function DeliveryCard({
   delivery: d, updatingId, editTrackingId, trackingDraft, trackingInputRef,
   onNextStatus, onOpenTracking, onSaveTracking, onTrackingChange, onCancelTracking, onScanTracking,
@@ -340,13 +344,32 @@ function DeliveryCard({
             <span className={`text-xs font-semibold px-2.5 py-1 rounded-full border ${statusStyles[d.status]}`}>
               {d.status}
             </span>
-            <span className="text-xs text-gray-400">
-              {new Date(d.created_at).toLocaleDateString('th-TH', { day: '2-digit', month: 'short', year: '2-digit' })}
-            </span>
           </div>
           <p className="font-semibold text-gray-800 mt-1">
             → {d.branch?.store_group ? `${d.branch.store_group.name} · ` : ''}{d.branch?.name ?? '—'}
           </p>
+          {/* Date timeline */}
+          <div className="mt-2 flex flex-col gap-1">
+            <div className="flex items-center gap-1.5 text-xs text-gray-400">
+              <span>📋</span>
+              <span>สร้าง:</span>
+              <span>{formatDate(d.created_at)}</span>
+            </div>
+            {d.shipped_at && (
+              <div className="flex items-center gap-1.5 text-xs font-medium text-blue-600">
+                <span>🚚</span>
+                <span>วันที่ส่ง:</span>
+                <span>{formatDate(d.shipped_at)}</span>
+              </div>
+            )}
+            {d.received_at && (
+              <div className="flex items-center gap-1.5 text-xs font-medium text-green-600">
+                <span>✅</span>
+                <span>วันที่รับ:</span>
+                <span>{formatDate(d.received_at)}</span>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
