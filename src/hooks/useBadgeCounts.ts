@@ -17,7 +17,17 @@ export function useBadgeCounts() {
     setCounts({ job: jobRes.count ?? 0, delivery: delRes.count ?? 0 })
   }, [])
 
-  useEffect(() => { refresh() }, [refresh])
+  useEffect(() => {
+    refresh()
+
+    const channel = supabase
+      .channel('badge-counts')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'jobs' }, () => refresh())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'deliveries' }, () => refresh())
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [refresh])
 
   return { counts, refresh }
 }

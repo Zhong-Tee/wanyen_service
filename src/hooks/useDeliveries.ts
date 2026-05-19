@@ -18,7 +18,17 @@ export function useDeliveries() {
     setLoading(false)
   }, [])
 
-  useEffect(() => { fetchAll() }, [fetchAll])
+  useEffect(() => {
+    fetchAll()
+
+    const channel = supabase
+      .channel('deliveries-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'deliveries' }, () => fetchAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'delivery_items' }, () => fetchAll())
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [fetchAll])
 
   const createDelivery = async (params: {
     to_branch_id: string

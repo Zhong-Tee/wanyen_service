@@ -17,7 +17,17 @@ export function useJobs() {
     setLoading(false)
   }, [])
 
-  useEffect(() => { fetchAll() }, [fetchAll])
+  useEffect(() => {
+    fetchAll()
+
+    const channel = supabase
+      .channel('jobs-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'jobs' }, () => fetchAll())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'job_images' }, () => fetchAll())
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [fetchAll])
 
   const createJob = async (title: string, description: string, imageFiles: File[]) => {
     const { data, error } = await supabase
