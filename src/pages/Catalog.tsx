@@ -91,7 +91,10 @@ export function Catalog() {
                         <span className="text-xs text-gray-500">{branchName}</span>
                       </div>
                     </div>
-                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700 flex-shrink-0">กำลังใช้</span>
+                    <div className="text-right flex-shrink-0">
+                        <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700">กำลังใช้</span>
+                        <p className="text-xs text-gray-500 mt-0.5 font-semibold">{s.quantity.toLocaleString()} แผ่น</p>
+                      </div>
                   </div>
                 )
               })}
@@ -193,9 +196,12 @@ export function Catalog() {
                   {item.product?.description && (
                     <p className="text-xs text-gray-400 mt-0.5 line-clamp-1">{item.product.description}</p>
                   )}
-                  <span className="inline-block mt-1.5 text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700">
-                    กำลังใช้
-                  </span>
+                  <div className="flex items-center justify-between mt-1.5">
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-green-100 text-green-700">
+                      กำลังใช้
+                    </span>
+                    <span className="text-xs font-bold text-gray-700">{item.quantity.toLocaleString()} <span className="font-normal text-gray-400">แผ่น</span></span>
+                  </div>
                 </div>
               </div>
             ))}

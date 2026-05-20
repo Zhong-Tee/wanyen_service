@@ -1,16 +1,38 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useBranches } from '../hooks/useBranches'
 import { useStock } from '../hooks/useStock'
 import { useProducts } from '../hooks/useProducts'
+import { useSheetSync } from '../hooks/useSheetSync'
+import type { SyncUnmatched } from '../hooks/useSheetSync'
 import { showToast } from '../components/Toast'
 import type { StoreGroup, BranchStock, StockStatus } from '../types'
 
 const STATUS_PRIORITY: Record<StockStatus, number> = { 'กำลังใช้': 0, 'เก็บ': 1, 'หมด': 2 }
 
+const REASON_LABEL: Record<SyncUnmatched['reason'], string> = {
+  no_branch: 'ไม่พบสาขา',
+  no_product: 'ไม่พบสินค้า',
+  no_active_stock: 'ไม่มีสต็อก กำลังใช้',
+}
+
+const REASON_COLOR: Record<SyncUnmatched['reason'], string> = {
+  no_branch: 'bg-orange-100 text-orange-700',
+  no_product: 'bg-yellow-100 text-yellow-700',
+  no_active_stock: 'bg-blue-100 text-blue-600',
+}
+
+function formatRelativeTime(date: Date): string {
+  const diff = Math.floor((Date.now() - date.getTime()) / 1000)
+  if (diff < 60) return 'เมื่อกี้'
+  if (diff < 3600) return `${Math.floor(diff / 60)} นาทีที่แล้ว`
+  return `${Math.floor(diff / 3600)} ชั่วโมงที่แล้ว`
+}
+
 export function Stock() {
   const { storeGroups, activeBranches: branches, loading: branchLoading } = useBranches()
   const { products } = useProducts()
   const { stock, loading: stockLoading, fetchByBranch, setStatus, addProductToBranch } = useStock()
+  const { syncing, syncError, result, sync } = useSheetSync()
 
   const [selectedGroup, setSelectedGroup] = useState<string>('')
   const [selectedBranch, setSelectedBranch] = useState<string>('')
@@ -23,6 +45,9 @@ export function Stock() {
   const [modalProductSearch, setModalProductSearch] = useState<string>('')
   const [zoomImage, setZoomImage] = useState<string | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [showNotif, setShowNotif] = useState(false)
+  const [notifFilter, setNotifFilter] = useState<SyncUnmatched['reason'] | 'all'>('no_product')
+  const notifRef = useRef<HTMLDivElement>(null)
 
   const [branchSearch, setBranchSearch] = useState<string>('')
   const filteredBranches = useMemo(() =>
@@ -43,6 +68,32 @@ export function Stock() {
 
   useEffect(() => { setSelectedBranch(''); setBranchSearch('') }, [selectedGroup])
   useEffect(() => { if (selectedBranch) fetchByBranch(selectedBranch) }, [selectedBranch, fetchByBranch])
+
+  // Refresh stock display after each sync
+  const prevLastSync = useRef<Date | null>(null)
+  useEffect(() => {
+    if (result?.lastSync && result.lastSync !== prevLastSync.current) {
+      prevLastSync.current = result.lastSync
+      if (selectedBranch) fetchByBranch(selectedBranch)
+    }
+  }, [result?.lastSync, selectedBranch, fetchByBranch])
+
+  // Close notification panel when clicking outside
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (notifRef.current && !notifRef.current.contains(e.target as Node)) {
+        setShowNotif(false)
+      }
+    }
+    if (showNotif) document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showNotif])
+
+  const unmatchedItems = result?.unmatched ?? []
+  const unmatchedCount = unmatchedItems.length
+  const filteredUnmatched = unmatchedItems.filter(
+    (u) => notifFilter === 'all' || u.reason === notifFilter
+  )
 
   const handleSetStatus = async (item: BranchStock, newStatus: StockStatus, qty?: number) => {
     if (newStatus === 'หมด' && confirmDeleteId !== item.id) {
@@ -75,11 +126,169 @@ export function Stock() {
     }
   }
 
+  const handleManualSync = async () => {
+    await sync()
+    if (selectedBranch) fetchByBranch(selectedBranch)
+  }
+
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-gray-900">Stock สินค้า</h1>
-        <p className="text-sm text-gray-500 mt-0.5">จัดการสต็อกสินค้าแต่ละสาขา</p>
+      {/* Page header */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1 min-w-0">
+          <h1 className="text-xl font-bold text-gray-900">Stock สินค้า</h1>
+          <p className="text-sm text-gray-500 mt-0.5">จัดการสต็อกสินค้าแต่ละสาขา</p>
+          {/* Sync status */}
+          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+            {syncing ? (
+              <span className="text-xs text-blue-500 flex items-center gap-1">
+                <span className="inline-block w-3 h-3 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                กำลังซิงค์ Sheet...
+              </span>
+            ) : result?.lastSync ? (
+              <span className="text-xs text-gray-400">
+                ซิงค์แล้ว: {formatRelativeTime(result.lastSync)} · อัปเดต {result.updatedCount} รายการ
+              </span>
+            ) : syncError ? (
+              <span className="text-xs text-red-400">ซิงค์ไม่ได้</span>
+            ) : null}
+            {!syncing && (
+              <button
+                onClick={handleManualSync}
+                className="text-xs text-pink-500 hover:text-pink-700 font-medium underline underline-offset-2"
+              >
+                ซิงค์เดี๋ยวนี้
+              </button>
+            )}
+          </div>
+          {syncError && (
+            <p className="text-xs text-red-500 mt-1">⚠️ {syncError}</p>
+          )}
+        </div>
+
+        {/* Notification bell */}
+        <div className="relative flex-shrink-0" ref={notifRef}>
+          <button
+            onClick={() => setShowNotif((v) => !v)}
+            className={`relative w-11 h-11 rounded-2xl flex items-center justify-center transition-all active:scale-95 shadow-sm border
+              ${showNotif ? 'bg-pink-50 border-pink-200' : 'bg-white border-gray-200 hover:border-pink-200 hover:bg-pink-50'}`}
+          >
+            <span className="text-xl">🔔</span>
+            {unmatchedCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1 leading-none shadow">
+                {unmatchedCount > 99 ? '99+' : unmatchedCount}
+              </span>
+            )}
+          </button>
+
+          {/* Notification panel */}
+          {showNotif && (
+            <div className="absolute right-0 top-14 w-80 bg-white rounded-2xl shadow-xl border border-gray-100 z-50 overflow-hidden">
+              {/* Panel header */}
+              <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+                <div>
+                  <p className="font-bold text-gray-800 text-sm">การแจ้งเตือน Sync</p>
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    {unmatchedCount === 0 ? 'จับคู่สำเร็จทั้งหมด ✅' : `จับคู่ไม่ได้ ${unmatchedCount} รายการ`}
+                  </p>
+                </div>
+                <button onClick={() => setShowNotif(false)} className="text-gray-400 hover:text-gray-600 text-lg w-7 h-7 flex items-center justify-center rounded-lg hover:bg-gray-100">✕</button>
+              </div>
+
+              {/* Filter tabs — แสดงเฉพาะหมวดที่มีข้อมูล และมีมากกว่า 1 หมวด */}
+              {unmatchedCount > 0 && (() => {
+                const activeReasons = (['no_branch', 'no_product'] as const).filter(
+                  (r) => unmatchedItems.some((u) => u.reason === r)
+                )
+                if (activeReasons.length <= 1) return null
+                return (
+                  <div className="px-3 pt-3 flex gap-1.5 flex-wrap">
+                    {activeReasons.map((r) => {
+                      const count = unmatchedItems.filter((u) => u.reason === r).length
+                      return (
+                        <button key={r} onClick={() => setNotifFilter(r)}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all
+                            ${notifFilter === r ? 'bg-pink-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                          {`${REASON_LABEL[r]} (${count})`}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
+
+              {/* Unmatched list */}
+              <div className="max-h-72 overflow-y-auto px-3 pb-3 pt-2 space-y-1.5">
+                {unmatchedCount === 0 ? (
+                  <div className="text-center py-6">
+                    <p className="text-3xl mb-2">✅</p>
+                    <p className="text-sm text-gray-400">ซิงค์สำเร็จทุกรายการ</p>
+                  </div>
+                ) : filteredUnmatched.length === 0 ? (
+                  <p className="text-center text-xs text-gray-400 py-4">ไม่มีรายการในหมวดนี้</p>
+                ) : (
+                  filteredUnmatched.map((u, i) => (
+                    <div key={i} className="flex items-start gap-2 bg-gray-50 rounded-xl p-2.5">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-gray-800 truncate">
+                          {u.branchNum} · {u.productName}
+                        </p>
+                        <p className="text-[11px] text-gray-500 truncate">{u.branchName}</p>
+                      </div>
+                      <span className={`flex-shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded-lg ${REASON_COLOR[u.reason]}`}>
+                        {REASON_LABEL[u.reason]}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+
+              {/* Diagnostic panel (แสดงเมื่ออัปเดต 0 รายการ) */}
+              {result && result.updatedCount === 0 && !syncError && (
+                <div className="mx-3 mb-2 bg-amber-50 border border-amber-100 rounded-xl p-3 space-y-2">
+                  <p className="text-xs font-bold text-amber-700">🔍 วิเคราะห์สาเหตุ (อัปเดต 0 รายการ)</p>
+                  <div className="text-[11px] text-amber-700 space-y-1">
+                    <p>📋 Rows จาก Sheet: <strong>{result.diag.sheetRowCount}</strong></p>
+                    <p>📦 สต็อก กำลังใช้ ใน DB: <strong>{result.diag.activeStockCount}</strong></p>
+                    <p>🏪 เลขสาขาใน Sheet: <strong>{result.diag.sheetBranchNums.slice(0, 5).join(', ')}{result.diag.sheetBranchNums.length > 5 ? '...' : ''}</strong></p>
+                    <p>🏪 สาขาใน DB (เลข+ชื่อ): <strong>{result.diag.supabaseBranchNums.length === 0 ? 'ไม่มีชื่อสาขาขึ้นต้นด้วยตัวเลข ⚠️' : result.diag.supabaseBranchNums.slice(0, 3).join(', ')}</strong></p>
+                    <p>🏷️ สินค้าใน DB: <strong>{result.diag.supabaseProducts.slice(0, 5).join(', ')}{result.diag.supabaseProducts.length > 5 ? '...' : ''}</strong></p>
+                  </div>
+                </div>
+              )}
+
+              {/* Sync error */}
+              {syncError && (
+                <div className="mx-3 mb-3 bg-red-50 border border-red-100 rounded-xl p-3">
+                  <p className="text-xs text-red-600 font-medium">⚠️ {syncError}</p>
+                  <p className="text-[11px] text-red-400 mt-1">
+                    ตรวจสอบว่า Google Sheet ถูก Publish to web แล้ว (File → Share → Publish to web)
+                  </p>
+                </div>
+              )}
+
+              <div className="px-3 pb-3 space-y-2">
+                <button
+                  onClick={handleManualSync}
+                  disabled={syncing}
+                  className="w-full py-2.5 rounded-xl bg-pink-600 text-white text-sm font-semibold hover:bg-pink-700 active:scale-95 transition-all disabled:opacity-60 flex items-center justify-center gap-2"
+                >
+                  {syncing ? (
+                    <>
+                      <span className="inline-block w-4 h-4 border-2 border-white/60 border-t-white rounded-full animate-spin" />
+                      กำลังซิงค์...
+                    </>
+                  ) : '🔄 ซิงค์เดี๋ยวนี้'}
+                </button>
+                {result?.sheetDataDate && (
+                  <p className="text-center text-[11px] text-gray-400">
+                    ข้อมูล Sheet ณ วันที่ <span className="font-semibold text-gray-600">{result.sheetDataDate}</span> เวลา <span className="font-semibold text-gray-600">{result.sheetDataTime}</span>
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Branch selector */}
@@ -189,14 +398,13 @@ export function Stock() {
         </section>
       )}
 
-      {/* Add product modal — all products allowed (duplicates OK) */}
+      {/* Add product modal */}
       {showAddProduct && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 space-y-4">
             <h3 className="font-bold text-gray-900 text-lg">เพิ่มสินค้าเข้า Stock</h3>
             <p className="text-xs text-gray-400">สามารถเพิ่มสินค้าซ้ำได้ แต่ละรายการจะแสดงแยกกัน</p>
 
-            {/* Product search in modal */}
             <div className="relative">
               <input
                 type="text" value={modalProductSearch}
@@ -231,9 +439,21 @@ export function Stock() {
               </div>
             )}
 
-            {/* Quantity input */}
             <div>
               <label className="text-xs font-medium text-gray-500 mb-1.5 block">จำนวน (แผ่น)</label>
+              <div className="flex flex-wrap gap-1.5 mb-2">
+                {[50, 100, 200, 320, 500, 1500].map((qty) => (
+                  <button
+                    key={qty}
+                    onClick={() => setAddingQty(String(qty))}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all active:scale-95
+                      ${addingQty === String(qty)
+                        ? 'bg-pink-600 text-white border-pink-600'
+                        : 'bg-gray-100 text-gray-600 border-gray-200 hover:bg-pink-50 hover:border-pink-300 hover:text-pink-600'}`}>
+                    {qty.toLocaleString()}
+                  </button>
+                ))}
+              </div>
               <div className="flex items-center gap-2">
                 <input
                   type="number" min="0" value={addingQty}

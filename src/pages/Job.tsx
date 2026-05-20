@@ -51,7 +51,7 @@ export function JobPage({ onAction }: JobPageProps) {
   const [imagePreviews, setImagePreviews] = useState<string[]>([])
   const [creating, setCreating] = useState(false)
 
-  const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'completed'>('all')
+  const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'completed'>('pending')
   const toDateStr = (d: Date) => {
     const y = d.getFullYear()
     const m = String(d.getMonth() + 1).padStart(2, '0')

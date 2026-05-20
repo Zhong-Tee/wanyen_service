@@ -1,12 +1,14 @@
-import { useState, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useCategories } from '../hooks/useCategories'
 import { useReport } from '../hooks/useCodes'
 import { useStockReport } from '../hooks/useStockReport'
 import { useBranches } from '../hooks/useBranches'
+import { useSheetStatusReport } from '../hooks/useSheetStatusReport'
+import type { BranchDetail, MachineStatusSummary } from '../hooks/useSheetStatusReport'
 import { ZoomImage } from '../components/ZoomImage'
 import { exportStockReportExcel } from '../lib/exportStockReport'
 
-type ReportTab = 'codes' | 'stock'
+type ReportTab = 'codes' | 'stock' | 'machine'
 
 export function Report() {
   const [activeTab, setActiveTab] = useState<ReportTab>('codes')
@@ -23,22 +25,160 @@ export function Report() {
         <button onClick={() => setActiveTab('codes')}
           className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-sm font-semibold transition-all
             ${activeTab === 'codes' ? 'bg-white text-pink-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-          🎟️ รายงานโค้ด
+          🎟️ โค้ด
         </button>
         <button onClick={() => setActiveTab('stock')}
           className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-sm font-semibold transition-all
             ${activeTab === 'stock' ? 'bg-white text-pink-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-          📦 สินค้าคงเหลือ
+          📦 สินค้า
+        </button>
+        <button onClick={() => setActiveTab('machine')}
+          className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-xl text-sm font-semibold transition-all
+            ${activeTab === 'machine' ? 'bg-white text-pink-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+          🖥️ สถานะตู้
         </button>
       </div>
 
-      {activeTab === 'codes' && <CodesReport />}
-      {activeTab === 'stock' && <StockReport />}
+      {activeTab === 'codes'   && <CodesReport />}
+      {activeTab === 'stock'   && <StockReport />}
+      {activeTab === 'machine' && <MachineStatusReport />}
     </div>
   )
 }
 
-// ── Codes Report (existing) ───────────────────────────────────────────────────
+// ── Machine Status Report ─────────────────────────────────────────────────────
+
+const STATUS_CONFIGS: {
+  key: keyof Pick<MachineStatusSummary, 'offline' | 'stockEmpty' | 'stockLow' | 'stockClosed' | 'inkEmpty' | 'notSync'>
+  label: string
+  icon: string
+  color: string
+  badgeColor: string
+}[] = [
+  { key: 'offline',     label: 'Offline',         icon: '📴', color: 'bg-red-50 border-red-200 text-red-700',       badgeColor: 'bg-red-500' },
+  { key: 'stockEmpty',  label: 'สินค้าหมด',       icon: '🚫', color: 'bg-orange-50 border-orange-200 text-orange-700', badgeColor: 'bg-orange-500' },
+  { key: 'stockLow',    label: 'สินค้าใกล้หมด',   icon: '⚠️', color: 'bg-yellow-50 border-yellow-200 text-yellow-700', badgeColor: 'bg-yellow-500' },
+  { key: 'stockClosed', label: 'ปิดสินค้า',        icon: '🔒', color: 'bg-gray-50 border-gray-200 text-gray-700',     badgeColor: 'bg-gray-400' },
+  { key: 'inkEmpty',    label: 'หมึกหมด',          icon: '🖨️', color: 'bg-purple-50 border-purple-200 text-purple-700', badgeColor: 'bg-purple-500' },
+  { key: 'notSync',     label: 'Not Sync',         icon: '🔌', color: 'bg-blue-50 border-blue-200 text-blue-700',    badgeColor: 'bg-blue-500' },
+]
+
+function MachineStatusReport() {
+  const { summary, loading, error, fetch } = useSheetStatusReport()
+  const [expanded, setExpanded] = useState<string | null>(null)
+
+  useEffect(() => { fetch() }, [fetch])
+
+  const handleCardClick = (key: string) => {
+    setExpanded((prev) => prev === key ? null : key)
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          {summary && (
+            <p className="text-xs text-gray-400 mt-0.5">
+              ข้อมูล ณ <span className="font-semibold text-gray-600">{summary.snapshotDate}</span> เวลา <span className="font-semibold text-gray-600">{summary.snapshotTime}</span>
+              {' · '}{summary.totalBranches} สาขา
+            </p>
+          )}
+        </div>
+        <button onClick={fetch} disabled={loading}
+          className="flex items-center gap-1.5 text-sm text-pink-600 font-medium bg-pink-50 px-3 py-1.5 rounded-lg hover:bg-pink-100 disabled:opacity-50">
+          <span className={loading ? 'animate-spin inline-block' : ''}>🔄</span>รีเฟรช
+        </button>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="bg-red-50 border border-red-100 rounded-2xl p-4 text-sm text-red-600">⚠️ {error}</div>
+      )}
+
+      {/* Loading skeleton */}
+      {loading && !summary && (
+        <div className="grid grid-cols-2 gap-3">
+          {[1,2,3,4,5,6].map((i) => <div key={i} className="h-24 bg-gray-100 rounded-2xl animate-pulse" />)}
+        </div>
+      )}
+
+      {/* Status cards grid */}
+      {summary && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            {STATUS_CONFIGS.map((cfg) => {
+              const branches = summary[cfg.key] as BranchDetail[]
+              const isOpen = expanded === cfg.key
+              return (
+                <button
+                  key={cfg.key}
+                  onClick={() => handleCardClick(cfg.key)}
+                  className={`rounded-2xl border p-4 text-left transition-all active:scale-95 shadow-sm
+                    ${cfg.color} ${isOpen ? 'ring-2 ring-pink-400 ring-offset-1' : 'hover:shadow-md'}`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="text-2xl">{cfg.icon}</span>
+                    <span className={`text-white text-xs font-bold px-2 py-0.5 rounded-full ${cfg.badgeColor}`}>
+                      {branches.length}
+                    </span>
+                  </div>
+                  <p className="font-bold text-sm mt-2">{cfg.label}</p>
+                  <p className="text-xs opacity-70 mt-0.5">สาขา · {isOpen ? 'คลิกซ่อน' : 'คลิกดูรายละเอียด'}</p>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Detail panel */}
+          {expanded && (() => {
+            const cfg = STATUS_CONFIGS.find((c) => c.key === expanded)!
+            const branches = summary[expanded as keyof typeof summary] as BranchDetail[]
+            return (
+              <section className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                <div className={`px-4 py-3 flex items-center justify-between border-b border-gray-100 ${cfg.color}`}>
+                  <p className="font-bold text-sm">{cfg.icon} {cfg.label} — {branches.length} สาขา</p>
+                  <button onClick={() => setExpanded(null)} className="text-lg opacity-60 hover:opacity-100">✕</button>
+                </div>
+                {branches.length === 0 ? (
+                  <div className="p-8 text-center">
+                    <p className="text-3xl mb-2">✅</p>
+                    <p className="text-sm text-gray-400">ไม่มีสาขาในสถานะนี้</p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-gray-50 max-h-72 overflow-y-auto">
+                    {branches.map((b) => (
+                      <div key={b.branchNum} className="flex items-start gap-3 px-4 py-3">
+                        <span className="flex-shrink-0 w-8 h-8 rounded-lg bg-gray-100 flex items-center justify-center text-xs font-bold text-gray-600">
+                          {b.branchNum}
+                        </span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-800">{b.branchName}</p>
+                          {b.products && b.products.length > 0 && (
+                            <ol className="mt-1.5 space-y-0.5">
+                              {b.products.map((p, i) => (
+                                <li key={i} className="text-xs text-gray-500 flex gap-1.5 items-baseline">
+                                  <span className="flex-shrink-0 text-gray-400 w-4 text-right">{i + 1}.</span>
+                                  <span>{p}</span>
+                                </li>
+                              ))}
+                            </ol>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )
+          })()}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Codes Report ──────────────────────────────────────────────────────────────
 
 function CodesReport() {
   const { categories, loading: catLoading } = useCategories()
@@ -134,11 +274,8 @@ function StockReport() {
 
   const handleExport = async () => {
     setExporting(true)
-    try {
-      await exportStockReportExcel(data, storeGroups)
-    } finally {
-      setExporting(false)
-    }
+    try { await exportStockReportExcel(data, storeGroups) }
+    finally { setExporting(false) }
   }
 
   const filtered = useMemo(() => {
@@ -155,7 +292,6 @@ function StockReport() {
     })
   }, [data, filterGroupId, search])
 
-  // Group by branch
   const byBranch = useMemo(() => {
     const map = new Map<string, typeof filtered>()
     filtered.forEach((s) => {
@@ -177,14 +313,12 @@ function StockReport() {
 
   return (
     <div className="space-y-5">
-      {/* Summary */}
       <div className="grid grid-cols-3 gap-3">
         <SummaryCard label="รายการทั้งหมด" value={totalItems} color="pink" icon="📦" />
         <SummaryCard label="กำลังใช้" value={activeItems} color="green" icon="✅" />
         <SummaryCard label="เก็บสำรอง" value={storedItems} color="gray" icon="🗂️" />
       </div>
 
-      {/* Filters */}
       <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 space-y-3">
         <div className="flex items-center justify-between gap-2">
           <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">กรองและค้นหา</span>
@@ -224,7 +358,6 @@ function StockReport() {
         </div>
       </section>
 
-      {/* Stock by branch */}
       {loading ? (
         <div className="space-y-3">{[1, 2].map((i) => <div key={i} className="h-32 bg-gray-100 rounded-2xl animate-pulse" />)}</div>
       ) : byBranch.size === 0 ? (
@@ -237,18 +370,25 @@ function StockReport() {
           {Array.from(byBranch.entries()).map(([, items]) => {
             const branch = items[0].branch
             const groupName = branch?.store_group?.name ?? ''
+            const totalQty = items.reduce((s, i) => s + (i.quantity ?? 0), 0)
+            const activeQty = items.filter((i) => i.status === 'กำลังใช้').reduce((s, i) => s + (i.quantity ?? 0), 0)
             return (
               <section key={items[0].branch_id} className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-                {/* Branch header */}
-                <div className="bg-gradient-to-r from-pink-50 to-purple-50 px-4 py-3 flex items-center justify-between border-b border-gray-100">
-                  <div className="flex items-center gap-2">
-                    {groupName && <span className="text-xs font-bold bg-pink-600 text-white px-2 py-0.5 rounded">{groupName}</span>}
-                    <span className="font-semibold text-gray-800">{branch?.name ?? '—'}</span>
+                <div className="bg-gradient-to-r from-pink-50 to-purple-50 px-4 py-3 border-b border-gray-100">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {groupName && <span className="flex-shrink-0 text-xs font-bold bg-pink-600 text-white px-2 py-0.5 rounded">{groupName}</span>}
+                      <span className="font-semibold text-gray-800 truncate">{branch?.name ?? '—'}</span>
+                    </div>
+                    <span className="flex-shrink-0 text-xs text-gray-400">{items.length} รายการ</span>
                   </div>
-                  <span className="text-xs text-gray-400">{items.length} รายการ</span>
+                  {/* จำนวนแผ่นรวม */}
+                  <div className="flex gap-3 mt-1.5">
+                    <span className="text-xs text-gray-500">รวม <span className="font-bold text-gray-700">{totalQty.toLocaleString()}</span> แผ่น</span>
+                    <span className="text-xs text-green-600">กำลังใช้ <span className="font-bold">{activeQty.toLocaleString()}</span> แผ่น</span>
+                  </div>
                 </div>
 
-                {/* Items */}
                 <div className="divide-y divide-gray-50">
                   {items.map((s) => (
                     <div key={s.id} className="flex items-center gap-3 px-4 py-3">
@@ -269,7 +409,9 @@ function StockReport() {
                       </div>
                       <div className="text-right flex-shrink-0">
                         <p className="text-xs text-gray-400">จำนวน(แผ่น)</p>
-                        <p className="font-bold text-gray-800">{s.quantity}</p>
+                        <p className={`font-bold ${s.quantity < 0 ? 'text-red-600' : 'text-gray-800'}`}>
+                          {s.quantity.toLocaleString()}
+                        </p>
                       </div>
                     </div>
                   ))}
@@ -282,6 +424,8 @@ function StockReport() {
     </div>
   )
 }
+
+// ── Shared ─────────────────────────────────────────────────────────────────────
 
 function SummaryCard({ label, value, color, icon }: { label: string; value: number; color: 'pink' | 'green' | 'gray'; icon: string }) {
   const styles = { pink: 'bg-pink-50 border-pink-100 text-pink-700', green: 'bg-green-50 border-green-100 text-green-700', gray: 'bg-gray-50 border-gray-200 text-gray-600' }
