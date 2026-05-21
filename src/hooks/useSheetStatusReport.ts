@@ -73,9 +73,9 @@ export function useSheetStatusReport() {
         .filter((r) => r.stockStatus === 'สินค้าใกล้หมด' && r.quantity <= 50)
         .map((r) => ({ branchName: r.branchName, branchNum: r.branchNum, product: `${r.productName} (${r.quantity.toLocaleString()} แผ่น)` }))
 
-      // ปิดสินค้า
+      // ปิดสินค้า: คอลัมน์ E มีคำว่า "ปิดใช้งาน" หรือ "ปิดสินค้า"
       const stockClosedPairs = snapshotRows
-        .filter((r) => r.stockStatus === 'ปิดสินค้า')
+        .filter((r) => r.stockStatus === 'ปิดใช้งาน' || r.stockStatus === 'ปิดสินค้า')
         .map((r) => ({ branchName: r.branchName, branchNum: r.branchNum, product: `${r.productName} (${r.quantity.toLocaleString()} แผ่น)` }))
 
       // หมึกหมด: Ribbon quantity < 0
@@ -83,7 +83,7 @@ export function useSheetStatusReport() {
         .filter((r) => r.productName.toLowerCase().includes('ribbon') && r.quantity < 0)
         .map((r) => ({ branchName: r.branchName, branchNum: r.branchNum, product: `${r.productName} (${r.quantity.toLocaleString()} แผ่น)` }))
 
-      // Not Sync: machine last update > 5 min behind snapshot
+      // Not Sync: เวลา sync ของเครื่อง (col H) ช้ากว่าเวลา snapshot (col A+B) เกิน 5 นาที
       const notSyncPairs = snapshotRows
         .filter((r) => {
           const machineDt = parseThaiDateTime(r.lastUpdateRaw)

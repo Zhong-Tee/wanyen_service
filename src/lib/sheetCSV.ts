@@ -36,12 +36,24 @@ export function toISODate(ddmmyyyy: string): string {
   return `${y.padStart(4, '0')}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`
 }
 
-/** แปลง DD/M/YYYY_BE HH:MM:SS (Thai Buddhist) → Date */
+/** แปลง DD/M/YYYY HH:MM:SS → Date
+ *  รองรับ 3 กรณี:
+ *   - ปี > 3000 → Apps Script นับ พ.ศ. ซ้ำ 2 รอบ (เช่น 3112) → ลบ 543×2
+ *   - ปี > 2500 → พ.ศ. ปกติ (เช่น 2569) → ลบ 543
+ *   - ปี ≤ 2500 → ค.ศ. → ใช้ตรงๆ */
 export function parseThaiDateTime(raw: string): Date | null {
   const m = raw.trim().match(/^(\d+)\/(\d+)\/(\d+)\s+(\d+):(\d+):(\d+)/)
   if (!m) return null
   const [, d, mo, y, h, min, s] = m
-  const yearCE = parseInt(y) - 543
+  const yearNum = parseInt(y)
+  let yearCE: number
+  if (yearNum > 3000) {
+    yearCE = yearNum - 1086   // พ.ศ. ถูกบวก 543 ซ้ำสองรอบโดย Apps Script
+  } else if (yearNum > 2500) {
+    yearCE = yearNum - 543    // พ.ศ. ปกติ
+  } else {
+    yearCE = yearNum          // ค.ศ. ใช้ตรงๆ
+  }
   return new Date(yearCE, parseInt(mo) - 1, parseInt(d), parseInt(h), parseInt(min), parseInt(s))
 }
 
