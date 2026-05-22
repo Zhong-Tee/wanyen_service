@@ -49,7 +49,7 @@ export function useBranches() {
     return { error: error?.message ?? null }
   }
 
-  const updateBranch = async (id: string, data: Partial<Pick<Branch, 'name' | 'address' | 'phone' | 'store_group_id'>>) => {
+  const updateBranch = async (id: string, data: Partial<Pick<Branch, 'name' | 'address' | 'phone' | 'store_group_id' | 'rent' | 'gp_percent'>>) => {
     const { error } = await supabase.from('branches').update(data).eq('id', id)
     if (!error) fetchAll()
     return { error: error?.message ?? null }

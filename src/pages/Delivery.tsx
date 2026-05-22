@@ -43,7 +43,7 @@ export function DeliveryPage({ onAction }: DeliveryPageProps) {
   const [items, setItems] = useState<DeliveryItemForm[]>([{ product_id: '', quantity: 320 }])
   const [creating, setCreating] = useState(false)
 
-  const [filterStatus, setFilterStatus] = useState<DeliveryStatus | 'all'>('all')
+  const [filterStatus, setFilterStatus] = useState<DeliveryStatus | 'all'>('ต้องจัดส่ง')
   const [branchSearch, setBranchSearch] = useState('')
   const [updatingId, setUpdatingId] = useState<string | null>(null)
 

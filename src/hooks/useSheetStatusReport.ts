@@ -12,6 +12,7 @@ export interface MachineStatusSummary {
   snapshotTime: string    // HH:MM:SS
   totalBranches: number
   offline: BranchDetail[]
+  online: BranchDetail[]
   stockEmpty: BranchDetail[]     // สินค้าหมด
   stockLow: BranchDetail[]       // สินค้าใกล้หมด
   stockClosed: BranchDetail[]    // ปิดสินค้า
@@ -58,9 +59,13 @@ export function useSheetStatusReport() {
       // ── นับสาขา unique ──────────────────────────────────────────────
       const totalBranches = new Set(snapshotRows.map((r) => r.branchNum)).size
 
-      // Offline
+      // Offline / Online
       const offlinePairs = snapshotRows
         .filter((r) => r.onlineStatus.toLowerCase() === 'offline')
+        .map((r) => ({ branchName: r.branchName, branchNum: r.branchNum }))
+
+      const onlinePairs = snapshotRows
+        .filter((r) => r.onlineStatus.toLowerCase() === 'online')
         .map((r) => ({ branchName: r.branchName, branchNum: r.branchNum }))
 
       // สินค้าหมด: เฉพาะรายการที่จำนวน <= 0
@@ -98,6 +103,7 @@ export function useSheetStatusReport() {
         snapshotTime,
         totalBranches,
         offline: uniqueBranches(offlinePairs),
+        online: uniqueBranches(onlinePairs),
         stockEmpty: uniqueBranches(stockEmptyPairs),
         stockLow: uniqueBranches(stockLowPairs),
         stockClosed: uniqueBranches(stockClosedPairs),

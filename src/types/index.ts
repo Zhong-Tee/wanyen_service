@@ -50,6 +50,8 @@ export interface Branch {
   address: string | null
   phone: string | null
   is_active: boolean
+  rent: number | null
+  gp_percent: number | null
   created_at: string
   store_group?: StoreGroup
 }

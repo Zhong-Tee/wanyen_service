@@ -1,4 +1,5 @@
 import { useState, useRef, useMemo } from 'react'
+import * as XLSX from 'xlsx'
 import { useCategories } from '../hooks/useCategories'
 import { useImportCodes } from '../hooks/useCodes'
 import { useBranches } from '../hooks/useBranches'
@@ -9,15 +10,17 @@ import type { ExcelCodeEntry } from '../lib/excel'
 import { DEFAULT_TEMPLATE } from '../lib/template'
 import { showToast } from '../components/Toast'
 import { ZoomImage } from '../components/ZoomImage'
+import { supabase } from '../lib/supabase'
 import type { CodeCategory, ImportResult, StoreGroup, Branch, Product } from '../types'
 
-type SettingsTab = 'general' | 'store-groups' | 'branches' | 'products'
+type SettingsTab = 'general' | 'store-groups' | 'branches' | 'products' | 'import-sales'
 
 const TABS: { id: SettingsTab; label: string; icon: string }[] = [
   { id: 'general', label: 'ทั่วไป', icon: '🎟️' },
   { id: 'store-groups', label: 'ประเภทร้าน', icon: '🏪' },
   { id: 'branches', label: 'สาขา', icon: '📍' },
   { id: 'products', label: 'สินค้า', icon: '📦' },
+  { id: 'import-sales', label: 'นำเข้ายอดขาย', icon: '📥' },
 ]
 
 export function Settings() {
@@ -44,6 +47,7 @@ export function Settings() {
       {activeTab === 'store-groups' && <StoreGroupsTab />}
       {activeTab === 'branches' && <BranchesTab />}
       {activeTab === 'products' && <ProductsTab />}
+      {activeTab === 'import-sales' && <ImportSalesTab />}
     </div>
   )
 }
@@ -429,6 +433,8 @@ function BranchesTab() {
   const [editAddress, setEditAddress] = useState('')
   const [editPhone, setEditPhone] = useState('')
   const [editStoreGroupId, setEditStoreGroupId] = useState('')
+  const [editRent, setEditRent] = useState('')
+  const [editGpPercent, setEditGpPercent] = useState('')
   const [savingEdit, setSavingEdit] = useState(false)
 
   const filteredBranches = useMemo(() => {
@@ -455,6 +461,8 @@ function BranchesTab() {
     setEditAddress(b.address ?? '')
     setEditPhone(b.phone ?? '')
     setEditStoreGroupId(b.store_group_id)
+    setEditRent(b.rent != null ? String(b.rent) : '')
+    setEditGpPercent(b.gp_percent != null ? String(b.gp_percent) : '')
   }
 
   const handleSaveEdit = async () => {
@@ -465,6 +473,8 @@ function BranchesTab() {
       address: editAddress.trim() || undefined,
       phone: editPhone.trim() || undefined,
       store_group_id: editStoreGroupId,
+      rent: editRent !== '' ? parseFloat(editRent) : null,
+      gp_percent: editGpPercent !== '' ? parseFloat(editGpPercent) : null,
     })
     setSavingEdit(false)
     if (error) showToast(`แก้ไขไม่ได้: ${error}`, 'error')
@@ -632,6 +642,20 @@ function BranchesTab() {
                 <label className="text-xs font-medium text-gray-500 mb-1 block">เบอร์โทร</label>
                 <input type="tel" value={editPhone} onChange={(e) => setEditPhone(e.target.value)}
                   className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400" />
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label className="text-xs font-medium text-gray-500 mb-1 block">ค่าเช่า (บาท/เดือน)</label>
+                  <input type="number" min="0" step="0.01" value={editRent} onChange={(e) => setEditRent(e.target.value)}
+                    placeholder="เช่น 5000"
+                    className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400" />
+                </div>
+                <div className="flex-1">
+                  <label className="text-xs font-medium text-gray-500 mb-1 block">GP (%)</label>
+                  <input type="number" min="0" max="100" step="0.01" value={editGpPercent} onChange={(e) => setEditGpPercent(e.target.value)}
+                    placeholder="เช่น 15"
+                    className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400" />
+                </div>
               </div>
             </div>
             <div className="flex gap-2">
@@ -871,6 +895,614 @@ function ProductsTab() {
               <button onClick={handleSaveEdit} disabled={savingEdit || !editName.trim()}
                 className="flex-1 py-3 rounded-xl bg-pink-600 text-white font-bold disabled:opacity-50 hover:bg-pink-700 active:scale-95">
                 {savingEdit ? 'กำลังบันทึก...' : '💾 บันทึก'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Import Sales Tab ───────────────────────────────────────────────────────────
+
+const SALES_COLUMN_MAP: Record<string, string> = {
+  // วันที่ / เวลา
+  'วันที่': 'sale_date',          'date': 'sale_date',            'sale_date': 'sale_date',
+  'เวลา': 'sale_time',            'time': 'sale_time',            'sale_time': 'sale_time',
+  'วันที่เวลา': 'sale_datetime',  'datetime': 'sale_datetime',
+
+  // สาขา
+  'สาขา': 'branch_name',          'branch': 'branch_name',        'ชื่อสาขา': 'branch_name',
+  'branch name': 'branch_name',   'branchname': 'branch_name',
+  'รหัสสาขา': 'branch_code',      'branchcode': 'branch_code',    'branchid': 'branch_code',
+
+  // เลขที่ใบเสร็จ
+  'เลขที่': 'transaction_no',     'เลขที่ใบเสร็จ': 'transaction_no', 'เลขที่รายการ': 'transaction_no',
+  'transactionno': 'transaction_no', 'billno': 'transaction_no',   'receiptno': 'transaction_no',
+
+  // สินค้า
+  'รหัสสินค้า': 'product_code',   'productcode': 'product_code',  'itemcode': 'product_code',
+  'ชื่อสินค้า': 'product_name',   'productname': 'product_name',  'itemname': 'product_name',
+  'สินค้า': 'product_name',       'รายการ': 'product_name',       'item': 'product_name',
+  'ประเภท': 'category',           'หมวดหมู่': 'category',         'category': 'category',       'กลุ่มสินค้า': 'category',
+
+  // จำนวน
+  'จำนวน': 'quantity',            'qty': 'quantity',              'quantity': 'quantity',
+  'จน.': 'quantity',              'จำนวนขาย': 'quantity',         'จำนวนชิ้น': 'quantity',
+
+  // ราคาต่อหน่วย
+  'ราคา': 'unit_price',           'ราคาต่อหน่วย': 'unit_price',   'unitprice': 'unit_price',
+  'price': 'unit_price',          'ราคาขาย': 'unit_price',        'ราคา/หน่วย': 'unit_price',
+
+  // ส่วนลด
+  'ส่วนลด': 'discount',           'discount': 'discount',         'disc': 'discount',
+
+  // ยอดรวม / ยอดขาย
+  'ยอดรวม': 'total_amount',       'ยอดขาย': 'total_amount',       'totalamount': 'total_amount',
+  'total': 'total_amount',        'amount': 'total_amount',        'ยอดเงิน': 'total_amount',
+  'จำนวนเงิน': 'total_amount',    'มูลค่า': 'total_amount',        'ราคารวม': 'total_amount',
+  'ยอดสุทธิ': 'total_amount',     'สุทธิ': 'total_amount',         'netsales': 'total_amount',
+  'nettotal': 'total_amount',     'nettamount': 'total_amount',    'netamount': 'total_amount',
+
+  // ยอดชำระ
+  'ยอดชำระ': 'payment_amount',    'ชำระเงิน': 'payment_amount',   'paymentamount': 'payment_amount',
+  'ชำระ': 'payment_amount',       'รับเงิน': 'payment_amount',
+
+  // ช่องทางชำระ
+  'ช่องทางชำระ': 'payment_method','วิธีชำระ': 'payment_method',   'paymentmethod': 'payment_method',
+  'payment': 'payment_method',    'paytype': 'payment_method',     'ช่องทาง': 'payment_method',
+}
+
+const NUMERIC_FIELDS = new Set(['quantity', 'unit_price', 'discount', 'total_amount', 'payment_amount'])
+
+interface ParsedSalesRow {
+  report_date: string
+  branch_code?: string | null
+  branch_name?: string | null
+  transaction_no?: string | null
+  sale_date?: string | null
+  sale_time?: string | null
+  sale_datetime?: string | null
+  product_code?: string | null
+  product_name?: string | null
+  category?: string | null
+  quantity?: number | null
+  unit_price?: number | null
+  discount?: number | null
+  total_amount?: number | null
+  payment_amount?: number | null
+  payment_method?: string | null
+  raw_data: Record<string, unknown>
+}
+
+interface SalesImportResult { inserted: number; deleted: number }
+
+function getYesterday(): string {
+  const d = new Date()
+  d.setDate(d.getDate() - 1)
+  return d.toISOString().slice(0, 10)
+}
+
+/**
+ * แปลงวันที่จากข้อความรูปแบบต่างๆ → YYYY-MM-DD
+ * รองรับ: DD/MM/YYYY, DD/MM/YY, YYYY-MM-DD และปีพุทธศักราช (>2400 → ลบ 543)
+ */
+function parseSaleDateToISO(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const s = String(raw).trim()
+
+  // ISO: 2026-05-21 หรือ 2026-05-21T...
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10)
+
+  // DD/MM/YYYY หรือ D/M/YYYY (Gregorian หรือ พ.ศ.)
+  const m1 = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})/)
+  if (m1) {
+    let y = parseInt(m1[3]); if (y > 2400) y -= 543
+    return `${y}-${m1[2].padStart(2, '0')}-${m1[1].padStart(2, '0')}`
+  }
+
+  // DD/MM/YY
+  const m2 = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2})$/)
+  if (m2) {
+    let y = parseInt(m2[3]) + 2000; if (y > 2400) y -= 543
+    return `${y}-${m2[2].padStart(2, '0')}-${m2[1].padStart(2, '0')}`
+  }
+
+  return null
+}
+
+/** ลอง skip 0–14 แถว เพื่อหา header row จริง (เหมือน _try_read_excel ใน Python) */
+function detectHeaderRow(sheet: XLSX.WorkSheet): Record<string, unknown>[] {
+  for (let skip = 0; skip < 15; skip++) {
+    const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+      raw: false, defval: null, range: skip,
+    })
+    // กรองแถวที่ว่างทั้งหมดออก
+    const nonEmpty = rows.filter((r) => Object.values(r).some((v) => v != null && String(v).trim() !== ''))
+    if (nonEmpty.length === 0) continue
+    const headers = Object.keys(nonEmpty[0])
+    const emptyCount = headers.filter((h) => /^_{1,2}EMPTY/.test(h)).length
+    // ถือว่าเจอ header จริงถ้าคอลัมน์ว่าง < ครึ่งหนึ่ง
+    if (headers.length > 1 && emptyCount < headers.length / 2) return nonEmpty
+  }
+  // fallback
+  return XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { raw: false, defval: null })
+}
+
+function parseSalesExcel(
+  file: File,
+  reportDate: string,
+): Promise<{ rows: ParsedSalesRow[]; mappedHeaders: string[]; unmappedHeaders: string[]; headerSkipped: number }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const data = e.target?.result
+        if (!data) { reject(new Error('ไม่สามารถอ่านไฟล์ได้')); return }
+
+        const workbook = XLSX.read(data, { type: 'array' })
+        const sheet = workbook.Sheets[workbook.SheetNames[0]]
+        const rawRows = detectHeaderRow(sheet)
+
+        if (rawRows.length === 0) { reject(new Error('ไม่พบข้อมูลในไฟล์')); return }
+
+        // กรองแถวว่างทั้งหมดออกก่อน
+        const nonEmptyRows = rawRows.filter((r) =>
+          Object.values(r).some((v) => v != null && String(v).trim() !== '')
+        )
+
+        // หาชื่อ column จริงที่ map ไปยัง transaction_no และ sale_date
+        // (เหมือน Python: กรองแถว summary/grand total ที่ไม่มี transaction_no / sale_date)
+        const hasValue = (v: unknown) => v != null && String(v).trim() !== '' && String(v).trim().toLowerCase() !== 'nan'
+        const idColNames = Object.keys(nonEmptyRows[0] ?? {}).filter((h) => {
+          const norm = h.trim().toLowerCase().replace(/\s+/g, '')
+          const dbField = SALES_COLUMN_MAP[h.trim()] ?? SALES_COLUMN_MAP[norm]
+          return dbField === 'transaction_no' || dbField === 'sale_date' || dbField === 'sale_datetime'
+        })
+        const dataRows = idColNames.length > 0
+          ? nonEmptyRows.filter((r) => idColNames.some((col) => hasValue(r[col])))
+          : nonEmptyRows
+
+        const allHeaders = Object.keys(dataRows[0])
+        const mappedHeaders: string[] = []
+        const unmappedHeaders: string[] = []
+
+        for (const h of allHeaders) {
+          const norm = h.trim().toLowerCase().replace(/\s+/g, '')
+          ;(SALES_COLUMN_MAP[h.trim()] || SALES_COLUMN_MAP[norm] ? mappedHeaders : unmappedHeaders).push(h)
+        }
+
+        const rows: ParsedSalesRow[] = dataRows.map((rawRow) => {
+          const mapped: Record<string, unknown> = {}
+          for (const [origKey, val] of Object.entries(rawRow)) {
+            const trimmed = origKey.trim()
+            const dbField = SALES_COLUMN_MAP[trimmed] ?? SALES_COLUMN_MAP[trimmed.toLowerCase().replace(/\s+/g, '')]
+            if (!dbField) continue
+            if (NUMERIC_FIELDS.has(dbField)) {
+              // รองรับทั้ง JS number โดยตรง และ string ที่ XLSX format แปลก เช่น "$1.00", "1,234.56"
+              if (typeof val === 'number') {
+                mapped[dbField] = isFinite(val) ? val : null
+              } else {
+                const cleaned = String(val ?? '')
+                  .trim()
+                  .replace(/[$฿€£¥₩%]/g, '')   // ตัด currency symbol ออก
+                  .replace(/,/g, '')              // ตัด thousand separator
+                  .replace(/\s/g, '')             // ตัด whitespace
+                const n = parseFloat(cleaned)
+                mapped[dbField] = isNaN(n) ? null : n
+              }
+            } else {
+              mapped[dbField] = val != null && String(val).trim() !== '' ? String(val).trim() : null
+            }
+          }
+          return {
+            report_date: reportDate,
+            branch_code: mapped.branch_code as string | null,
+            branch_name: mapped.branch_name as string | null,
+            transaction_no: mapped.transaction_no as string | null,
+            sale_date: mapped.sale_date as string | null,
+            sale_time: mapped.sale_time as string | null,
+            sale_datetime: mapped.sale_datetime as string | null,
+            product_code: mapped.product_code as string | null,
+            product_name: mapped.product_name as string | null,
+            category: mapped.category as string | null,
+            quantity: mapped.quantity as number | null,
+            unit_price: mapped.unit_price as number | null,
+            discount: mapped.discount as number | null,
+            total_amount: mapped.total_amount as number | null,
+            payment_amount: mapped.payment_amount as number | null,
+            payment_method: mapped.payment_method as string | null,
+            raw_data: rawRow,
+          }
+        })
+
+        resolve({ rows, mappedHeaders, unmappedHeaders, headerSkipped: 0 })
+      } catch (err) {
+        reject(new Error(`อ่านไฟล์ไม่ได้: ${err instanceof Error ? err.message : 'Unknown error'}`))
+      }
+    }
+    reader.onerror = () => reject(new Error('โหลดไฟล์ไม่ได้'))
+    reader.readAsArrayBuffer(file)
+  })
+}
+
+function ImportSalesTab() {
+  const [dateMode, setDateMode] = useState<'manual' | 'auto'>('auto')
+  const [reportDate, setReportDate] = useState(getYesterday())
+  const [fileName, setFileName] = useState('')
+  const [parsedRows, setParsedRows] = useState<ParsedSalesRow[] | null>(null)
+  const [mappedHeaders, setMappedHeaders] = useState<string[]>([])
+  const [unmappedHeaders, setUnmappedHeaders] = useState<string[]>([])
+  const [parsing, setParsing] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState<SalesImportResult | null>(null)
+  const [existingDates, setExistingDates] = useState<string[]>([])
+  const [confirmVisible, setConfirmVisible] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // วันที่ที่ไม่ซ้ำในข้อมูลที่อ่านมา (ใช้ใน auto mode)
+  const uniqueDates = useMemo(() => {
+    if (!parsedRows) return []
+    return [...new Set(parsedRows.map((r) => r.report_date).filter(Boolean))].sort()
+  }, [parsedRows])
+
+  const branchSummary = useMemo(() => {
+    if (!parsedRows) return []
+    const map = new Map<string, number>()
+    for (const row of parsedRows) {
+      const key = row.branch_name ?? '(ไม่ระบุสาขา)'
+      map.set(key, (map.get(key) ?? 0) + 1)
+    }
+    return Array.from(map.entries()).sort((a, b) => b[1] - a[1])
+  }, [parsedRows])
+
+  const totalAmount = useMemo(
+    () => parsedRows?.reduce((s, r) => s + (r.total_amount ?? 0), 0) ?? 0,
+    [parsedRows],
+  )
+
+  const reset = () => {
+    setParsedRows(null)
+    setFileName('')
+    setMappedHeaders([])
+    setUnmappedHeaders([])
+    setImportResult(null)
+  }
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setFileName(file.name)
+    setParsedRows(null)
+    setImportResult(null)
+    setParsing(true)
+    try {
+      // ส่งวันที่ placeholder ก่อน แล้วค่อย override ถ้าเป็น auto mode
+      const { rows, mappedHeaders: mh, unmappedHeaders: um } = await parseSalesExcel(file, reportDate)
+      if (rows.length === 0) { showToast('ไม่พบข้อมูลในไฟล์หลังกรองแถวหัวตารางออก', 'warning'); return }
+
+      // โหมดอัตโนมัติ: ใช้วันที่จากคอลัมน์ sale_date ของแต่ละแถว
+      let finalRows = rows
+      if (dateMode === 'auto') {
+        let noDateCount = 0
+        finalRows = rows.map((row) => {
+          const parsed = parseSaleDateToISO(row.sale_date ?? row.sale_datetime)
+          if (!parsed) { noDateCount++; return row }
+          return { ...row, report_date: parsed }
+        })
+        if (noDateCount > 0) {
+          showToast(`ไม่พบวันที่ใน ${noDateCount} แถว — แถวเหล่านั้นใช้วันที่ ${reportDate} แทน`, 'warning')
+        }
+      }
+
+      setParsedRows(finalRows)
+      setMappedHeaders(mh)
+      setUnmappedHeaders(um)
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'อ่านไฟล์ไม่ได้', 'error')
+    } finally {
+      setParsing(false)
+      e.target.value = ''
+    }
+  }
+
+  const handleImportClick = async () => {
+    if (!parsedRows) return
+    // ตรวจข้อมูลซ้ำ: ในโหมด auto ตรวจทุกวันที่ที่มีในไฟล์
+    const datesToCheck = dateMode === 'auto' ? uniqueDates : [reportDate]
+    const { data } = await supabase
+      .from('daily_sales_report')
+      .select('report_date')
+      .in('report_date', datesToCheck)
+    const found = [...new Set((data ?? []).map((r: { report_date: string }) => r.report_date as string))]
+    setExistingDates(found)
+    setConfirmVisible(true)
+  }
+
+  const handleConfirmImport = async (replace: boolean) => {
+    if (!parsedRows) return
+    setConfirmVisible(false)
+    setImporting(true)
+    try {
+      let deleted = 0
+      if (replace && existingDates.length > 0) {
+        const { error } = await supabase
+          .from('daily_sales_report')
+          .delete()
+          .in('report_date', existingDates)
+        if (error) throw new Error(`ลบข้อมูลเดิมไม่ได้: ${error.message}`)
+        deleted = existingDates.length
+      }
+
+      const BATCH = 500
+      let inserted = 0
+      for (let i = 0; i < parsedRows.length; i += BATCH) {
+        const { error } = await supabase.from('daily_sales_report').insert(parsedRows.slice(i, i + BATCH))
+        if (error) throw new Error(`นำเข้าไม่ได้: ${error.message}`)
+        inserted += Math.min(BATCH, parsedRows.length - i)
+      }
+
+      setImportResult({ inserted, deleted })
+      showToast(`นำเข้าสำเร็จ ${inserted.toLocaleString()} แถว`, 'success')
+      reset()
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'เกิดข้อผิดพลาด', 'error')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+
+      {/* Date mode selector */}
+      <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 space-y-3">
+        <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">วันที่รายงาน</h2>
+
+        {/* Toggle */}
+        <div className="flex gap-2 bg-gray-100 p-1 rounded-xl w-fit">
+          <button
+            onClick={() => { setDateMode('auto'); reset() }}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all
+              ${dateMode === 'auto' ? 'bg-white text-pink-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            อัตโนมัติจากไฟล์
+          </button>
+          <button
+            onClick={() => { setDateMode('manual'); reset() }}
+            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all
+              ${dateMode === 'manual' ? 'bg-white text-pink-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+          >
+            ระบุวันที่เอง
+          </button>
+        </div>
+
+        {dateMode === 'auto' ? (
+          <div className="bg-blue-50 border border-blue-100 rounded-xl p-3 text-sm text-blue-700">
+            ระบบจะอ่านวันที่จากคอลัมน์ <strong>วันที่ / sale_date</strong> ของแต่ละแถวในไฟล์ — เหมาะสำหรับไฟล์ที่มีหลายวัน
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 flex-wrap">
+            <input
+              type="date" value={reportDate}
+              onChange={(e) => { setReportDate(e.target.value); reset() }}
+              className="border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400"
+            />
+            <span className="text-xs text-gray-400">ทุกแถวในไฟล์จะใช้ <code className="bg-gray-100 px-1 rounded">report_date = {reportDate}</code></span>
+          </div>
+        )}
+      </section>
+
+      {/* File upload */}
+      <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 space-y-4">
+        <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">อัพโหลดไฟล์ยอดขาย</h2>
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={parsing || importing}
+          className="w-full border-2 border-dashed border-pink-200 bg-pink-50 hover:bg-pink-100 rounded-xl py-8 flex flex-col items-center gap-2 transition-colors disabled:opacity-50 cursor-pointer"
+        >
+          <span className="text-4xl">{parsing ? '⏳' : '📊'}</span>
+          <span className="text-sm font-medium text-pink-600">
+            {parsing ? 'กำลังอ่านไฟล์...' : 'คลิกหรือลากไฟล์ .xlsx / .xls มาวาง'}
+          </span>
+          {fileName && !parsing && (
+            <span className="text-xs bg-pink-100 text-pink-600 px-2.5 py-1 rounded-full font-medium">{fileName}</span>
+          )}
+        </button>
+        <input ref={fileInputRef} type="file" accept=".xlsx,.xls" onChange={handleFileChange} className="hidden" />
+        <p className="text-xs text-gray-400">ใช้ column map เดียวกับ wanyenreport.py — รองรับทั้งภาษาไทยและภาษาอังกฤษ</p>
+      </section>
+
+      {/* Preview */}
+      {parsedRows && (
+        <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">ผลการอ่านไฟล์</h2>
+            <span className="text-xl font-bold text-pink-700">{parsedRows.length.toLocaleString()} แถว</span>
+          </div>
+
+          {/* Column mapping badges */}
+          <div className="space-y-2">
+            {mappedHeaders.length > 0 && (
+              <div className="bg-green-50 border border-green-100 rounded-xl p-3">
+                <p className="text-xs font-semibold text-green-700 mb-1.5">จับคู่คอลัมน์ได้ ({mappedHeaders.length})</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {mappedHeaders.map((h) => (
+                    <span key={h} className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full">{h}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {unmappedHeaders.length > 0 && (
+              <div className="bg-gray-50 border border-gray-100 rounded-xl p-3">
+                <p className="text-xs font-semibold text-gray-500 mb-1.5">เก็บใน raw_data ({unmappedHeaders.length})</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {unmappedHeaders.map((h) => (
+                    <span key={h} className="text-xs bg-gray-200 text-gray-500 px-2 py-0.5 rounded-full">{h}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Date summary (auto mode) */}
+          {dateMode === 'auto' && uniqueDates.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 mb-2">วันที่ที่พบในไฟล์ ({uniqueDates.length} วัน)</p>
+              <div className="flex flex-wrap gap-1.5">
+                {uniqueDates.map((d) => (
+                  <span key={d} className="text-xs bg-blue-100 text-blue-700 px-2.5 py-1 rounded-full font-medium">{d}</span>
+                ))}
+              </div>
+              {uniqueDates.length === 0 && (
+                <p className="text-xs text-orange-600 bg-orange-50 rounded-xl p-3">
+                  ไม่สามารถอ่านวันที่จากคอลัมน์ sale_date ได้ — กรุณาเปลี่ยนเป็นโหมด "ระบุวันที่เอง"
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Branch summary */}
+          {branchSummary.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-gray-500 mb-2">สรุปตามสาขา</p>
+              <div className="space-y-1.5">
+                {branchSummary.map(([branch, count]) => (
+                  <div key={branch} className="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
+                    <span className="text-sm text-gray-700">{branch}</span>
+                    <span className="text-sm font-bold text-pink-700">{count.toLocaleString()} แถว</span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between bg-pink-50 rounded-lg px-3 py-2 border border-pink-100">
+                  <span className="text-sm font-semibold text-pink-700">ยอดรวมทั้งหมด</span>
+                  <span className="text-sm font-bold text-pink-700">฿{totalAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Preview table */}
+          <div>
+            <p className="text-xs font-semibold text-gray-500 mb-2">ตัวอย่าง 5 แถวแรก</p>
+            <div className="overflow-x-auto rounded-xl border border-gray-100">
+              <table className="w-full text-xs">
+                <thead className="bg-gray-50">
+                  <tr>
+                    {['สาขา', 'เลขที่', 'สินค้า', 'จำนวน', 'ยอดรวม', 'ช่องทาง'].map((h) => (
+                      <th key={h} className="px-3 py-2 text-left font-semibold text-gray-500 whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {parsedRows.slice(0, 5).map((row, i) => (
+                    <tr key={i} className="hover:bg-gray-50">
+                      <td className="px-3 py-2 text-gray-700 whitespace-nowrap max-w-[120px] truncate">{row.branch_name ?? '-'}</td>
+                      <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{row.transaction_no ?? '-'}</td>
+                      <td className="px-3 py-2 text-gray-700 max-w-[140px] truncate">{row.product_name ?? '-'}</td>
+                      <td className="px-3 py-2 text-gray-500 text-right">{row.quantity ?? '-'}</td>
+                      <td className="px-3 py-2 text-pink-700 font-medium text-right whitespace-nowrap">
+                        {row.total_amount != null ? `฿${row.total_amount.toLocaleString()}` : '-'}
+                      </td>
+                      <td className="px-3 py-2 text-gray-500 whitespace-nowrap">{row.payment_method ?? '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <button
+            onClick={handleImportClick}
+            disabled={importing}
+            className="w-full py-3 rounded-xl bg-pink-600 text-white font-bold hover:bg-pink-700 active:scale-95 disabled:opacity-50 transition-all"
+          >
+            {importing ? 'กำลังนำเข้า...' : `📥 นำเข้า ${parsedRows.length.toLocaleString()} แถว`}
+          </button>
+        </section>
+      )}
+
+      {/* Import result */}
+      {importResult && (
+        <section className="bg-green-50 border border-green-200 rounded-2xl p-5 space-y-3">
+          <p className="font-semibold text-green-700 text-sm">✅ นำเข้าสำเร็จ</p>
+          <div className={`grid gap-2 text-center ${importResult.deleted > 0 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+            <div className="bg-green-100 rounded-xl py-3">
+              <p className="text-2xl font-bold text-green-700">{importResult.inserted.toLocaleString()}</p>
+              <p className="text-xs text-green-600">แถวที่นำเข้า</p>
+            </div>
+            {importResult.deleted > 0 && (
+              <div className="bg-orange-100 rounded-xl py-3">
+                <p className="text-2xl font-bold text-orange-600">{importResult.deleted.toLocaleString()}</p>
+                <p className="text-xs text-orange-500">แถวเดิมที่ถูกแทนที่</p>
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-green-600">ดูข้อมูลได้ในแท็บ รายงาน → ยอดขาย</p>
+        </section>
+      )}
+
+      {/* Confirm modal */}
+      {confirmVisible && parsedRows && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 space-y-4">
+            <div className="text-center">
+              <p className="text-4xl mb-2">{existingDates.length > 0 ? '⚠️' : '📥'}</p>
+              <h3 className="font-bold text-gray-900 text-lg">
+                {existingDates.length > 0 ? 'พบข้อมูลซ้ำ' : 'ยืนยันการนำเข้า'}
+              </h3>
+            </div>
+            <div className="bg-gray-50 rounded-xl p-4 text-sm space-y-2">
+              {dateMode === 'auto' ? (
+                <div className="flex justify-between">
+                  <span className="text-gray-500">วันที่ในไฟล์</span>
+                  <span className="font-semibold">
+                    {uniqueDates.length} วัน
+                    {uniqueDates.length > 0 && (
+                      <span className="text-gray-400 font-normal"> ({uniqueDates[0]} – {uniqueDates[uniqueDates.length - 1]})</span>
+                    )}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex justify-between">
+                  <span className="text-gray-500">วันที่</span>
+                  <span className="font-semibold">{reportDate}</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-gray-500">แถวที่จะนำเข้า</span>
+                <span className="font-bold text-pink-700">{parsedRows.length.toLocaleString()} แถว</span>
+              </div>
+              {existingDates.length > 0 && (
+                <div className="flex justify-between border-t border-gray-200 pt-2">
+                  <span className="text-gray-500">วันที่มีข้อมูลเดิม</span>
+                  <span className="font-bold text-orange-600">{existingDates.length} วัน</span>
+                </div>
+              )}
+            </div>
+            {existingDates.length > 0 && (
+              <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 space-y-1.5">
+                <p className="text-xs font-semibold text-orange-700">วันที่มีข้อมูลอยู่แล้ว:</p>
+                <div className="flex flex-wrap gap-1">
+                  {existingDates.map((d) => (
+                    <span key={d} className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full">{d}</span>
+                  ))}
+                </div>
+                <p className="text-xs text-orange-700">
+                  การยืนยันจะ<strong>ลบข้อมูลวันที่เหล่านี้ทั้งหมด</strong>และแทนที่ด้วยข้อมูลใหม่
+                </p>
+              </div>
+            )}
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmVisible(false)}
+                className="flex-1 py-3 rounded-xl border border-gray-200 text-gray-600 font-medium hover:bg-gray-50"
+              >ยกเลิก</button>
+              <button
+                onClick={() => handleConfirmImport(existingDates.length > 0)}
+                className="flex-1 py-3 rounded-xl bg-pink-600 text-white font-bold hover:bg-pink-700 active:scale-95"
+              >
+                {existingDates.length > 0 ? '🔄 แทนที่และนำเข้า' : '📥 นำเข้า'}
               </button>
             </div>
           </div>
