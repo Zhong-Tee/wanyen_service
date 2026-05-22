@@ -5,21 +5,25 @@ import type { Branch } from '../types'
 export interface BranchProfitRow {
   branch_name: string
   total_sales: number
+  total_qty: number
   cost_type: 'rent' | 'gp' | 'none'
   cost_value: number | null
   cost_amount: number
   profit: number
+  matched: boolean  // true = พบสาขาใน branches table, false = ไม่พบ (ชื่อไม่ตรง)
 }
 
-async function fetchBranchSales(dateFrom: string, dateTo: string): Promise<Map<string, number>> {
+interface SalesEntry { sales: number; qty: number }
+
+async function fetchBranchSales(dateFrom: string, dateTo: string): Promise<Map<string, SalesEntry>> {
   const PAGE = 1000
-  const map = new Map<string, number>()
+  const map = new Map<string, SalesEntry>()
   let offset = 0
 
   while (true) {
     const { data, error } = await supabase
       .from('daily_sales_summary')
-      .select('branch_name, total_sales')
+      .select('branch_name, total_sales, total_qty')
       .gte('report_date', dateFrom)
       .lte('report_date', dateTo)
       .range(offset, offset + PAGE - 1)
@@ -28,7 +32,11 @@ async function fetchBranchSales(dateFrom: string, dateTo: string): Promise<Map<s
     for (const r of data ?? []) {
       const name = r.branch_name as string | null
       if (!name) continue
-      map.set(name, (map.get(name) ?? 0) + Number(r.total_sales ?? 0))
+      const cur = map.get(name) ?? { sales: 0, qty: 0 }
+      map.set(name, {
+        sales: cur.sales + Number(r.total_sales ?? 0),
+        qty:   cur.qty   + Number(r.total_qty   ?? 0),
+      })
     }
     if (!data || data.length < PAGE) break
     offset += PAGE
@@ -69,21 +77,48 @@ export function useProfitReport() {
     try {
       const [salesMap, branchRes] = await Promise.all([
         fetchBranchSales(dateFrom, dateTo),
-        supabase.from('branches').select('id, name, rent, gp_percent, is_active').eq('is_active', true).order('name'),
+        supabase.from('branches').select('id, name, rent, gp_percent, is_active').order('name'),
       ])
       if (branchRes.error) throw new Error(branchRes.error.message)
 
       const months = calcMonthsBetween(dateFrom, dateTo)
       const branches = (branchRes.data ?? []) as Pick<Branch, 'id' | 'name' | 'rent' | 'gp_percent' | 'is_active'>[]
 
-      // สร้าง map ชื่อสาขา (lowercase) → ข้อมูลสาขา เพื่อ match แบบ case-insensitive
-      const branchByName = new Map(branches.map((b) => [b.name.trim().toLowerCase(), b]))
+      // normalize ชื่อ: lowercase + ลด whitespace เหลือช่องเดียว
+      const normName = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ')
+
+      // map 1: exact normalized match
+      const branchByName = new Map(branches.map((b) => [normName(b.name), b]))
+
+      // map 2: เลขนำหน้า → สาขา (fallback)
+      // ถ้าเลขซ้ำกันในหลายสาขาให้ mark เป็น null (ambiguous — ไม่ใช้)
+      type BranchRow = Pick<Branch, 'id' | 'name' | 'rent' | 'gp_percent' | 'is_active'>
+      const branchByPrefix = new Map<string, BranchRow | null>()
+      for (const b of branches) {
+        const m = b.name.trim().match(/^(\d+)/)
+        if (!m) continue
+        const prefix = m[1]
+        branchByPrefix.set(prefix, branchByPrefix.has(prefix) ? null : b)
+      }
+
+      const findBranch = (salesName: string): BranchRow | undefined => {
+        // 1. exact match
+        const exact = branchByName.get(normName(salesName))
+        if (exact) return exact
+        // 2. จับเลขนำหน้า เช่น "36 MS Future Rangsit 9:30" → "36"
+        const m = salesName.trim().match(/^(\d+)/)
+        if (m) {
+          const byPrefix = branchByPrefix.get(m[1])
+          if (byPrefix != null) return byPrefix
+        }
+        return undefined
+      }
 
       // Loop จาก salesMap เป็นหลัก เพื่อให้ยอดรวมครบทุกสาขาที่มีข้อมูลขาย
       const result: BranchProfitRow[] = []
-      salesMap.forEach((total_sales, salesBranchName) => {
+      salesMap.forEach(({ sales: total_sales, qty: total_qty }, salesBranchName) => {
         if (!salesBranchName) return
-        const b = branchByName.get(salesBranchName.trim().toLowerCase())
+        const b = findBranch(salesBranchName)
         let cost_type: 'rent' | 'gp' | 'none' = 'none'
         let cost_amount = 0
         let cost_value: number | null = null
@@ -101,10 +136,12 @@ export function useProfitReport() {
         result.push({
           branch_name: salesBranchName,
           total_sales,
+          total_qty,
           cost_type,
           cost_value,
           cost_amount,
           profit: total_sales - cost_amount,
+          matched: b !== undefined,
         })
       })
 

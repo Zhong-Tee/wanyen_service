@@ -12,11 +12,13 @@ export interface SalesSummaryRow {
 export interface BranchSalesSummary {
   branch_name: string
   total_sales: number
+  total_qty: number
 }
 
 export interface SalesReportData {
   rows: SalesSummaryRow[]
   totalSales: number
+  totalQty: number
   byBranch: BranchSalesSummary[]
 }
 
@@ -53,16 +55,18 @@ async function fetchSalesRange(dateFrom: string, dateTo: string): Promise<SalesR
     }))
 
   const totalSales = rows.reduce((sum, r) => sum + r.total_sales, 0)
+  const totalQty = rows.reduce((sum, r) => sum + r.total_qty, 0)
 
-  const branchMap = new Map<string, number>()
+  const branchMap = new Map<string, { sales: number; qty: number }>()
   for (const r of rows) {
-    branchMap.set(r.branch_name, (branchMap.get(r.branch_name) ?? 0) + r.total_sales)
+    const cur = branchMap.get(r.branch_name) ?? { sales: 0, qty: 0 }
+    branchMap.set(r.branch_name, { sales: cur.sales + r.total_sales, qty: cur.qty + r.total_qty })
   }
   const byBranch: BranchSalesSummary[] = [...branchMap.entries()]
-    .map(([branch_name, total_sales]) => ({ branch_name, total_sales }))
+    .map(([branch_name, { sales, qty }]) => ({ branch_name, total_sales: sales, total_qty: qty }))
     .sort((a, b) => b.total_sales - a.total_sales)
 
-  return { rows, totalSales, byBranch }
+  return { rows, totalSales, totalQty, byBranch }
 }
 
 function fmtLocalDate(d: Date): string {

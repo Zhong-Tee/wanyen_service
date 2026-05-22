@@ -561,6 +561,10 @@ function SalesReport() {
     () => filteredByBranch.reduce((s, b) => s + b.total_sales, 0),
     [filteredByBranch]
   )
+  const filteredQty = useMemo(
+    () => filteredByBranch.reduce((s, b) => s + b.total_qty, 0),
+    [filteredByBranch]
+  )
 
   return (
     <div className="space-y-4">
@@ -602,21 +606,42 @@ function SalesReport() {
 
       {data && (
         <>
-          {/* ยอดรวม */}
-          <div className={`grid gap-3 ${compareMode && data2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
-            <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
-              <p className="text-xs text-gray-400 mb-1">ยอดขายรวม (ช่วงที่ 1)</p>
-              <p className="text-2xl font-bold text-pink-700">฿{fmtBaht(search ? filteredTotal : data.totalSales)}</p>
-              <p className="text-xs text-gray-400 mt-0.5">{dateFrom} — {dateTo}</p>
-            </section>
-            {compareMode && data2 && (
-              <section className="bg-white rounded-2xl shadow-sm border border-blue-100 p-4">
-                <p className="text-xs text-gray-400 mb-1">ยอดขายรวม (ช่วงที่ 2)</p>
-                <p className="text-2xl font-bold text-blue-700">฿{fmtBaht(data2.totalSales)}</p>
-                <p className="text-xs text-gray-400 mt-0.5">{dateFrom2} — {dateTo2}</p>
+          {/* Summary cards */}
+          {!compareMode ? (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-pink-50 border border-pink-100 rounded-xl p-3 text-center">
+                <p className="text-xs text-pink-500">ยอดขายรวม</p>
+                <p className="text-lg font-bold text-pink-700 mt-1">
+                  ฿{fmtBaht(search ? filteredTotal : data.totalSales)}
+                </p>
+                <p className="text-xs text-pink-400 mt-0.5">{dateFrom} — {dateTo}</p>
+              </div>
+              <div className="bg-purple-50 border border-purple-100 rounded-xl p-3 text-center">
+                <p className="text-xs text-purple-500">จำนวนแผ่นรวม</p>
+                <p className="text-lg font-bold text-purple-700 mt-1">
+                  {(search ? filteredQty : data.totalQty).toLocaleString()}
+                </p>
+                <p className="text-xs text-purple-400 mt-0.5">แผ่น</p>
+              </div>
+            </div>
+          ) : (
+            <div className={`grid gap-3 ${data2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+              <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+                <p className="text-xs text-gray-400 mb-1">ยอดขายรวม (ช่วงที่ 1)</p>
+                <p className="text-xl font-bold text-pink-700">฿{fmtBaht(search ? filteredTotal : data.totalSales)}</p>
+                <p className="text-xs text-purple-600 font-medium mt-0.5">{(search ? filteredQty : data.totalQty).toLocaleString()} แผ่น</p>
+                <p className="text-xs text-gray-400 mt-0.5">{dateFrom} — {dateTo}</p>
               </section>
-            )}
-          </div>
+              {data2 && (
+                <section className="bg-white rounded-2xl shadow-sm border border-blue-100 p-4">
+                  <p className="text-xs text-gray-400 mb-1">ยอดขายรวม (ช่วงที่ 2)</p>
+                  <p className="text-xl font-bold text-blue-700">฿{fmtBaht(data2.totalSales)}</p>
+                  <p className="text-xs text-blue-400 font-medium mt-0.5">{data2.totalQty.toLocaleString()} แผ่น</p>
+                  <p className="text-xs text-gray-400 mt-0.5">{dateFrom2} — {dateTo2}</p>
+                </section>
+              )}
+            </div>
+          )}
 
           {/* ยอดขายแยกสาขา */}
           <section className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
@@ -641,18 +666,25 @@ function SalesReport() {
               <div className="divide-y divide-gray-50">
                 {filteredByBranch.map((b) => {
                   const b2 = data2?.byBranch.find((x) => x.branch_name === b.branch_name)
-                  const diff = b2 != null ? b.total_sales - b2.total_sales : null
+                  const diffSales = b2 != null ? b.total_sales - b2.total_sales : null
+                  const diffQty   = b2 != null ? b.total_qty   - b2.total_qty   : null
                   return (
                     <div key={b.branch_name} className="flex items-center gap-3 px-4 py-3">
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-gray-800 truncate">{b.branch_name}</p>
+                        <p className="text-xs text-purple-500 mt-0.5">{b.total_qty.toLocaleString()} แผ่น</p>
                       </div>
                       <div className="text-right flex-shrink-0">
                         <p className="text-sm font-bold text-pink-700">฿{fmtBaht(b.total_sales)}</p>
                         {compareMode && b2 != null && (
-                          <p className={`text-xs font-semibold ${diff! >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                            {diff! >= 0 ? '▲' : '▼'} ฿{fmtBaht(Math.abs(diff!))}
-                          </p>
+                          <>
+                            <p className={`text-xs font-semibold ${diffSales! >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                              {diffSales! >= 0 ? '▲' : '▼'} ฿{fmtBaht(Math.abs(diffSales!))}
+                            </p>
+                            <p className={`text-xs ${diffQty! >= 0 ? 'text-green-500' : 'text-red-400'}`}>
+                              {diffQty! >= 0 ? '▲' : '▼'} {Math.abs(diffQty!).toLocaleString()} แผ่น
+                            </p>
+                          </>
                         )}
                         {compareMode && b2 == null && (
                           <p className="text-xs text-gray-300">ไม่มีข้อมูลช่วงที่ 2</p>
@@ -661,6 +693,7 @@ function SalesReport() {
                       {compareMode && data2 && (
                         <div className="text-right flex-shrink-0 w-24">
                           <p className="text-sm font-bold text-blue-600">฿{fmtBaht(b2?.total_sales ?? 0)}</p>
+                          <p className="text-xs text-blue-400">{(b2?.total_qty ?? 0).toLocaleString()} แผ่น</p>
                         </div>
                       )}
                     </div>
@@ -785,15 +818,21 @@ function ProfitReport() {
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-xs text-gray-400">
-                    <span>ยอดขาย: <span className="text-pink-600 font-medium">฿{fmtBaht(r.total_sales)}</span></span>
+                    <div className="flex items-center gap-2">
+                      <span>ยอดขาย: <span className="text-pink-600 font-medium">฿{fmtBaht(r.total_sales)}</span></span>
+                      <span className="text-purple-400">{r.total_qty.toLocaleString()} แผ่น</span>
+                    </div>
                     {r.cost_type === 'rent' && (
                       <span>ค่าเช่า: <span className="text-orange-500 font-medium">฿{fmtBaht(r.cost_amount)}</span></span>
                     )}
                     {r.cost_type === 'gp' && (
                       <span>GP {r.cost_value}%: <span className="text-orange-500 font-medium">฿{fmtBaht(r.cost_amount)}</span></span>
                     )}
-                    {r.cost_type === 'none' && (
+                    {r.cost_type === 'none' && r.matched && (
                       <span className="text-gray-300">ยังไม่ได้ตั้งค่าเช่า/GP</span>
+                    )}
+                    {r.cost_type === 'none' && !r.matched && (
+                      <span className="text-red-300">ไม่พบชื่อสาขาในระบบ</span>
                     )}
                   </div>
                 </div>
