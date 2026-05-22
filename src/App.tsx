@@ -10,6 +10,7 @@ import { Stock } from './pages/Stock'
 import { JobPage } from './pages/Job'
 import { Catalog } from './pages/Catalog'
 import { DeliveryPage } from './pages/Delivery'
+import { Printer } from './pages/Printer'
 
 export default function App() {
   const [activePage, setActivePage] = useState<Page>('issue')
@@ -26,6 +27,7 @@ export default function App() {
     <>
       <Layout activePage={activePage} onNavigate={handleNavigate} badges={counts}>
         {activePage === 'issue'    && <IssueCode />}
+        {activePage === 'printer'  && <Printer />}
         {activePage === 'catalog'  && <Catalog />}
         {activePage === 'stock'    && <Stock />}
         {activePage === 'job'      && <JobPage onAction={refreshBadges} />}

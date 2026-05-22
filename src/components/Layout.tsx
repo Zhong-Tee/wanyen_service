@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import type { BadgeCounts } from '../hooks/useBadgeCounts'
 
-export type Page = 'issue' | 'catalog' | 'stock' | 'job' | 'delivery' | 'report' | 'settings'
+export type Page = 'issue' | 'printer' | 'catalog' | 'stock' | 'job' | 'delivery' | 'report' | 'settings'
 
 interface LayoutProps {
   children: ReactNode
@@ -12,11 +12,12 @@ interface LayoutProps {
 
 const NAV_ITEMS: { page: Page; label: string; icon: string }[] = [
   { page: 'issue',    label: 'ออกโค้ด', icon: '🎟️' },
-  { page: 'catalog',  label: 'สินค้า',   icon: '🛍️' },
+  { page: 'printer',  label: 'Printer',  icon: '🖨️' },
   { page: 'stock',    label: 'Stock',    icon: '📦' },
   { page: 'job',      label: 'Job',      icon: '📋' },
   { page: 'delivery', label: 'จัดส่ง',   icon: '🚚' },
   { page: 'report',   label: 'รายงาน',   icon: '📊' },
+  { page: 'catalog',  label: 'สินค้า',   icon: '🛍️' },
   { page: 'settings', label: 'ตั้งค่า',   icon: '⚙️' },
 ]
 

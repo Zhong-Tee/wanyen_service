@@ -1,0 +1,71 @@
+{
+  "_comment": "ตัวอย่าง config สาขาที่เป็น Hub + มีปริ้นเตอร์ 2 เครื่อง",
+  "_comment2": "command_hub: true ได้แค่ 1 เครื่องในระบบ — 159 สาขาที่เหลือใช้ config.json (command_hub: false)",
+  "_comment3": "นำไฟล์นี้ไปใช้จริง: copy แล้ว rename เป็น config.json ในโฟลเดอร์เดียวกับ printer_monitor.exe (UTF-8 ได้ทั้งแบบมี/ไม่มี BOM)",
+
+  "branch": {
+    "id": "18",
+    "name": "18 WY QSK Hub"
+  },
+
+  "telegram": {
+    "bot_token": "8819195951:AAGao6LeM4Btfe39bfdxR0Dyf4kYJafRB4c",
+    "chat_id": "-5256056032",
+    "command_mode": "branch",
+    "command_hub": true,
+    "require_branch": true,
+    "queue_poll_seconds": 5
+  },
+
+  "supabase": {
+    "url": "https://ljbvhppbcdczghxnvebt.supabase.co",
+    "key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxqYnZocHBiY2RjemdoeG52ZWJ0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwNDIzNzQsImV4cCI6MjA5NDYxODM3NH0.4Qk5J0PctP7ea0yHjEkjr4sziN8_WEs-rnshctwIkgU",
+    "table_name": "printer_log"
+  },
+
+  "bartender": {
+    "_comment": "path ของ bartend.exe — ปรับตามเวอร์ชันที่ติดตั้ง",
+    "exe_path": "C:/Program Files (x86)/Seagull/BarTender 7.10/Trial/bartend.exe"
+  },
+
+  "printers": [
+    {
+      "id": "printer_01",
+      "name": "Printer_01",
+      "ip": "192.168.1.111",
+      "snmp_community": "public",
+      "bartender_template": "C:/ST/app_cust_V.6/FormatSA.btw",
+      "sticker": {
+        "height_mm": 11,
+        "gap_mm": 2,
+        "initial_stock": 5000,
+        "low_stock_threshold": 200,
+        "stock_count_file": "stock_printer_01.json"
+      }
+    },
+    {
+      "id": "printer_02",
+      "name": "Printer_02",
+      "ip": "192.168.1.112",
+      "snmp_community": "public",
+      "bartender_template": "C:/ST/app_cust_V.6/FormatMH2.btw",
+      "sticker": {
+        "height_mm": 11,
+        "gap_mm": 2,
+        "initial_stock": 5000,
+        "low_stock_threshold": 200,
+        "stock_count_file": "stock_printer_02.json"
+      }
+    }
+  ],
+
+  "alert": {
+    "_comment": "ตั้งค่าการแจ้งเตือน Telegram",
+    "offline_confirm_checks": 3,
+    "cooldown_minutes": 30,
+    "notify_startup": false
+  },
+
+  "check_interval": 60,
+  "log_interval": 300
+}

@@ -732,6 +732,9 @@ function ProfitReport() {
   const filteredTotalCost = useMemo(() => sortedRows.reduce((s, r) => s + r.cost_amount, 0), [sortedRows])
   const filteredTotalProfit = useMemo(() => sortedRows.reduce((s, r) => s + r.profit, 0), [sortedRows])
 
+  const displayProfit = search ? filteredTotalProfit : totalProfit
+  const isProfit = displayProfit >= 0
+
   const fmtBaht = (n: number) =>
     n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 
@@ -767,10 +770,10 @@ function ProfitReport() {
               <p className="text-xs text-orange-500">ค่าใช้จ่ายรวม</p>
               <p className="text-base font-bold text-orange-600 mt-1">฿{fmtBaht(search ? filteredTotalCost : totalCost)}</p>
             </div>
-            <div className={`rounded-xl p-3 text-center border ${(search ? filteredTotalProfit : totalProfit) >= 0 ? 'bg-green-50 border-green-100' : 'bg-red-50 border-red-100'}`}>
-              <p className={`text-xs ${(search ? filteredTotalProfit : totalProfit) >= 0 ? 'text-green-600' : 'text-red-500'}`}>กำไร/ขาดทุน</p>
-              <p className={`text-base font-bold mt-1 ${(search ? filteredTotalProfit : totalProfit) >= 0 ? 'text-green-700' : 'text-red-600'}`}>
-                {(search ? filteredTotalProfit : totalProfit) >= 0 ? '+' : ''}฿{fmtBaht(search ? filteredTotalProfit : totalProfit)}
+            <div className={`rounded-xl p-3 text-center border ${isProfit ? 'bg-green-50 border-green-100' : 'bg-red-50 border-red-100'}`}>
+              <p className={`text-xs ${isProfit ? 'text-green-600' : 'text-red-500'}`}>กำไร/ขาดทุน</p>
+              <p className={`text-base font-bold mt-1 ${isProfit ? 'text-green-700' : 'text-red-600'}`}>
+                ฿{fmtBaht(displayProfit)}
               </p>
             </div>
           </div>
