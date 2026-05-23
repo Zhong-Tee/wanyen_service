@@ -131,7 +131,23 @@ export function useSheetSync() {
         }
 
         const stockIds = stockMap.get(`${branch.id}__${product.id}`)
-        if (!stockIds || stockIds.length === 0) continue
+        if (!stockIds || stockIds.length === 0) {
+          // แจ้งเตือนเมื่อ Sheet บอกว่าสินค้าพร้อม/ใกล้หมด แต่ DB ไม่มีสต็อก กำลังใช้ คู่นี้
+          const isActiveInSheet = row.stockStatus === 'สินค้าพร้อม' || row.stockStatus === 'สินค้าใกล้หมด'
+          if (isActiveInSheet) {
+            const k = `nas_${row.branchNum}_${row.productName}`
+            if (!seenUnmatched.has(k)) {
+              seenUnmatched.add(k)
+              unmatched.push({
+                branchName: row.branchName,
+                branchNum: row.branchNum,
+                productName: row.productName,
+                reason: 'no_active_stock',
+              })
+            }
+          }
+          continue
+        }
 
         for (const id of stockIds) {
           updates.push({ id, quantity: row.quantity })

@@ -46,7 +46,7 @@ export function Stock() {
   const [zoomImage, setZoomImage] = useState<string | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [showNotif, setShowNotif] = useState(false)
-  const [notifFilter, setNotifFilter] = useState<SyncUnmatched['reason'] | 'all'>('no_product')
+  const [notifFilter, setNotifFilter] = useState<SyncUnmatched['reason'] | 'all'>('all')
   const notifRef = useRef<HTMLDivElement>(null)
 
   const [branchSearch, setBranchSearch] = useState<string>('')
@@ -197,12 +197,17 @@ export function Stock() {
 
               {/* Filter tabs — แสดงเฉพาะหมวดที่มีข้อมูล และมีมากกว่า 1 หมวด */}
               {unmatchedCount > 0 && (() => {
-                const activeReasons = (['no_branch', 'no_product'] as const).filter(
+                const activeReasons = (['no_branch', 'no_product', 'no_active_stock'] as const).filter(
                   (r) => unmatchedItems.some((u) => u.reason === r)
                 )
                 if (activeReasons.length <= 1) return null
                 return (
                   <div className="px-3 pt-3 flex gap-1.5 flex-wrap">
+                    <button onClick={() => setNotifFilter('all')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all
+                        ${notifFilter === 'all' ? 'bg-pink-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
+                      ทั้งหมด ({unmatchedCount})
+                    </button>
                     {activeReasons.map((r) => {
                       const count = unmatchedItems.filter((u) => u.reason === r).length
                       return (

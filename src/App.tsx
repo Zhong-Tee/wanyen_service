@@ -32,7 +32,7 @@ export default function App() {
         {activePage === 'stock'    && <Stock />}
         {activePage === 'job'      && <JobPage onAction={refreshBadges} />}
         {activePage === 'delivery' && <DeliveryPage onAction={refreshBadges} />}
-        {activePage === 'report'   && <Report />}
+        {activePage === 'report'   && <Report serviceAlertCount={counts.service} />}
         {activePage === 'settings' && <Settings />}
       </Layout>
       <ToastContainer toasts={toasts} onRemove={removeToast} />

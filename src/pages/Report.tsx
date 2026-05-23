@@ -25,17 +25,32 @@ const TAB_ROW2: { key: ReportTab; label: string; icon: string }[] = [
   { key: 'service', label: 'Service',       icon: '🔧' },
 ]
 
-function TabButton({ tab, active, onClick }: { tab: { key: ReportTab; label: string; icon: string }; active: boolean; onClick: () => void }) {
+function TabButton({
+  tab,
+  active,
+  onClick,
+  badge,
+}: {
+  tab: { key: ReportTab; label: string; icon: string }
+  active: boolean
+  onClick: () => void
+  badge?: number
+}) {
   return (
     <button onClick={onClick}
-      className={`flex-1 flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-semibold transition-all
+      className={`relative flex-1 flex items-center justify-center gap-1 py-2 rounded-xl text-xs font-semibold transition-all
         ${active ? 'bg-white text-pink-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
       {tab.icon} {tab.label}
+      {badge != null && badge > 0 && (
+        <span className="absolute -top-1.5 -right-1 min-w-[16px] h-4 bg-red-500 text-white text-[9px] font-bold rounded-full flex items-center justify-center px-1 leading-none">
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
     </button>
   )
 }
 
-export function Report() {
+export function Report({ serviceAlertCount = 0 }: { serviceAlertCount?: number }) {
   const [activeTab, setActiveTab] = useState<ReportTab>('codes')
 
   return (
@@ -55,7 +70,13 @@ export function Report() {
       {/* Tab bar — แถวที่ 2 (ใหม่) */}
       <div className="flex gap-1.5 bg-gray-100 p-1 rounded-2xl">
         {TAB_ROW2.map((t) => (
-          <TabButton key={t.key} tab={t} active={activeTab === t.key} onClick={() => setActiveTab(t.key)} />
+          <TabButton
+            key={t.key}
+            tab={t}
+            active={activeTab === t.key}
+            onClick={() => setActiveTab(t.key)}
+            badge={t.key === 'service' ? serviceAlertCount : undefined}
+          />
         ))}
       </div>
 
