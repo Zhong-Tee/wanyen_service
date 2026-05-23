@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -70,50 +71,118 @@ function sortPrinters(printers: PrinterRecord[]): PrinterRecord[] {
   return [...printers].sort((a, b) => a.printer_id.localeCompare(b.printer_id))
 }
 
-// ── Branch Command Menu ───────────────────────────────────────────────────────
+/** นาที — ถ้าสาขายังมีเครื่องที่ report อยู่ ให้ซ่อนเครื่องที่ไม่ report นานกว่านี้ (ลบออกจาก config แล้ว) */
+const STALE_PRINTER_MINUTES = 15
+
+function filterActivePrinters(printers: PrinterRecord[]): PrinterRecord[] {
+  if (printers.length <= 1) return sortPrinters(printers)
+  const sorted = sortPrinters(printers)
+  const hasFresh = sorted.some((p) => minutesSince(p.timestamp) < STALE_PRINTER_MINUTES)
+  if (!hasFresh) return sorted
+  return sorted.filter((p) => minutesSince(p.timestamp) < STALE_PRINTER_MINUTES)
+}
+
+function groupByBranch(records: PrinterRecord[]): PrinterRecord[][] {
+  const map = new Map<string, PrinterRecord[]>()
+  records.forEach((r) => {
+    const key = r.branch_id ?? r.branch_name
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(r)
+  })
+  return Array.from(map.values())
+    .map((printers) => filterActivePrinters(printers))
+    .filter((printers) => printers.length > 0)
+    .sort((a, b) => a[0].branch_name.localeCompare(b[0].branch_name, 'th'))
+}
+
+// ── Printer Command Menu (ต่อแถวปริ้นเตอร์) ─────────────────────────────────
 
 type Toast = { message: string; type: 'success' | 'error' }
 
-interface BranchCommandMenuProps {
+interface PrinterCommandMenuProps {
   branchId: string
-  branchName: string
-  printers: PrinterRecord[]
+  printer: PrinterRecord
+  printerIndex: number
   onToast: (toast: Toast) => void
 }
 
-function BranchCommandMenu({ branchId, branchName, printers, onToast }: BranchCommandMenuProps) {
+function PrinterCommandMenu({
+  branchId,
+  printer,
+  printerIndex,
+  onToast,
+}: PrinterCommandMenuProps) {
   const [menuOpen, setMenuOpen] = useState(false)
-  const [pickPrinter, setPickPrinter] = useState<'testprint' | 'resetstock' | null>(null)
+  const [mode, setMode] = useState<'menu' | 'resetstock'>('menu')
   const [resetStock, setResetStock] = useState('5000')
   const [sending, setSending] = useState(false)
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
+  const buttonRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
 
-  const sorted = useMemo(() => sortPrinters(printers), [printers])
+  const closeAll = useCallback(() => {
+    setMenuOpen(false)
+    setMode('menu')
+    setMenuPos(null)
+  }, [])
+
+  const updateMenuPosition = useCallback(() => {
+    const btn = buttonRef.current
+    const menu = menuRef.current
+    if (!btn) return
+
+    const btnRect = btn.getBoundingClientRect()
+    const menuWidth = 200
+    const menuHeight = menu?.offsetHeight ?? (mode === 'resetstock' ? 180 : 130)
+    const bottomNavReserve = 72
+    const spaceBelow = window.innerHeight - btnRect.bottom - bottomNavReserve
+    const openUp = spaceBelow < menuHeight + 8
+
+    const top = openUp
+      ? Math.max(8, btnRect.top - menuHeight - 4)
+      : btnRect.bottom + 4
+    const left = Math.max(
+      8,
+      Math.min(btnRect.right - menuWidth, window.innerWidth - menuWidth - 8)
+    )
+
+    setMenuPos({ top, left })
+  }, [mode])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    updateMenuPosition()
+    const onScroll = () => closeAll()
+    window.addEventListener('scroll', onScroll, true)
+    window.addEventListener('resize', updateMenuPosition)
+    return () => {
+      window.removeEventListener('scroll', onScroll, true)
+      window.removeEventListener('resize', updateMenuPosition)
+    }
+  }, [menuOpen, closeAll, updateMenuPosition])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    requestAnimationFrame(updateMenuPosition)
+  }, [menuOpen, mode, updateMenuPosition])
 
   useEffect(() => {
     if (!menuOpen) return
     const onClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false)
-        setPickPrinter(null)
-      }
+      const target = e.target as Node
+      if (buttonRef.current?.contains(target) || menuRef.current?.contains(target)) return
+      closeAll()
     }
     document.addEventListener('mousedown', onClickOutside)
     return () => document.removeEventListener('mousedown', onClickOutside)
-  }, [menuOpen])
+  }, [menuOpen, closeAll])
 
-  const closeAll = () => {
-    setMenuOpen(false)
-    setPickPrinter(null)
-  }
-
-  const sendTestPrint = async (printerIndex: number) => {
+  const sendTestPrint = async () => {
     setSending(true)
     try {
       await enqueuePrinterCommand(branchId, 'testprint', [printerIndex, 1])
-      const name = sorted[printerIndex]?.printer_name ?? `เครื่อง ${printerIndex + 1}`
       onToast({
-        message: `ส่ง Test Print สาขา ${branchId} · ${name} · 1 แผ่น`,
+        message: `ส่ง Test Print สาขา ${branchId} · ${printer.printer_name} · 1 แผ่น`,
         type: 'success',
       })
       closeAll()
@@ -127,7 +196,7 @@ function BranchCommandMenu({ branchId, branchName, printers, onToast }: BranchCo
     }
   }
 
-  const sendResetStock = async (printerIndex: number) => {
+  const sendResetStock = async () => {
     const rows = parseInt(resetStock, 10)
     if (!rows || rows <= 0) {
       onToast({ message: 'กรุณาระบุจำนวนแถวที่ถูกต้อง', type: 'error' })
@@ -136,9 +205,8 @@ function BranchCommandMenu({ branchId, branchName, printers, onToast }: BranchCo
     setSending(true)
     try {
       await enqueuePrinterCommand(branchId, 'resetstock', [printerIndex, rows])
-      const name = sorted[printerIndex]?.printer_name ?? `เครื่อง ${printerIndex + 1}`
       onToast({
-        message: `ส่ง Reset Stock สาขา ${branchId} · ${name} · ${rows.toLocaleString()} แถว`,
+        message: `ส่ง Reset Stock สาขา ${branchId} · ${printer.printer_name} · ${rows.toLocaleString()} แถว`,
         type: 'success',
       })
       closeAll()
@@ -153,129 +221,93 @@ function BranchCommandMenu({ branchId, branchName, printers, onToast }: BranchCo
     }
   }
 
-  const onTestPrintClick = () => {
-    if (sorted.length === 1) {
-      void sendTestPrint(0)
-      return
-    }
-    setPickPrinter('testprint')
-  }
-
-  const onResetStockClick = () => {
-    if (sorted.length === 1) {
-      setPickPrinter('resetstock')
-      return
-    }
-    setPickPrinter('resetstock')
-  }
+  const menuDropdown =
+    menuOpen &&
+    menuPos &&
+    createPortal(
+      <div
+        ref={menuRef}
+        className="fixed z-[100] w-[200px] bg-white border border-gray-200 rounded-xl shadow-xl py-1 text-sm"
+        style={{ top: menuPos.top, left: menuPos.left }}
+      >
+        {mode === 'menu' ? (
+          <>
+            <p className="text-xs text-gray-400 px-3 pt-2 pb-1 truncate">{printer.printer_name}</p>
+            <button
+              type="button"
+              disabled={sending}
+              onClick={() => void sendTestPrint()}
+              className="w-full text-left px-3 py-2 hover:bg-pink-50 disabled:opacity-50"
+            >
+              🖨️ Test Print
+            </button>
+            <button
+              type="button"
+              disabled={sending}
+              onClick={() => setMode('resetstock')}
+              className="w-full text-left px-3 py-2 hover:bg-pink-50 disabled:opacity-50 border-t border-gray-100"
+            >
+              📦 Reset Stock
+            </button>
+          </>
+        ) : (
+          <div className="px-3 py-2 space-y-2">
+            <p className="text-xs text-gray-500 truncate">Reset Stock — {printer.printer_name}</p>
+            <label className="block text-xs text-gray-500">
+              จำนวนแถวใหม่
+              <input
+                type="number"
+                min={1}
+                value={resetStock}
+                onChange={(e) => setResetStock(e.target.value)}
+                className="mt-1 w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400"
+              />
+            </label>
+            <button
+              type="button"
+              disabled={sending}
+              onClick={() => void sendResetStock()}
+              className="w-full text-xs font-medium text-white bg-pink-600 rounded-lg py-2 hover:bg-pink-700 disabled:opacity-50"
+            >
+              ยืนยัน Reset Stock
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode('menu')}
+              className="w-full text-xs text-gray-400 py-1 hover:text-gray-600"
+            >
+              ← กลับ
+            </button>
+          </div>
+        )}
+      </div>,
+      document.body
+    )
 
   return (
-    <div className="relative" ref={menuRef}>
-      <button
-        type="button"
-        onClick={() => {
-          setMenuOpen((v) => !v)
-          setPickPrinter(null)
-        }}
-        disabled={sending}
-        className="text-xs font-medium text-pink-700 bg-white border border-pink-200 px-2.5 py-1 rounded-lg hover:bg-pink-50 disabled:opacity-50 shadow-sm"
-      >
-        คำสั่ง
-      </button>
-
-      {menuOpen && (
-        <div className="absolute right-0 top-full mt-1 z-20 min-w-[180px] bg-white border border-gray-200 rounded-xl shadow-lg py-1 text-sm">
-          {!pickPrinter ? (
-            <>
-              <button
-                type="button"
-                disabled={sending}
-                onClick={onTestPrintClick}
-                className="w-full text-left px-3 py-2 hover:bg-pink-50 disabled:opacity-50"
-              >
-                🖨️ Test Print
-              </button>
-              <button
-                type="button"
-                disabled={sending}
-                onClick={onResetStockClick}
-                className="w-full text-left px-3 py-2 hover:bg-pink-50 disabled:opacity-50 border-t border-gray-100"
-              >
-                📦 Reset Stock
-              </button>
-            </>
-          ) : pickPrinter === 'testprint' ? (
-            <div className="px-2 py-2">
-              <p className="text-xs text-gray-500 px-1 pb-2">เลือกเครื่อง (1 แผ่น)</p>
-              {sorted.map((p, i) => (
-                <button
-                  key={p.printer_id}
-                  type="button"
-                  disabled={sending}
-                  onClick={() => void sendTestPrint(i)}
-                  className="w-full text-left px-2 py-1.5 rounded-lg hover:bg-pink-50 disabled:opacity-50 truncate"
-                >
-                  {i + 1}. {p.printer_name}
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => setPickPrinter(null)}
-                className="w-full text-xs text-gray-400 mt-1 py-1 hover:text-gray-600"
-              >
-                ← กลับ
-              </button>
-            </div>
-          ) : (
-            <div className="px-3 py-2 space-y-2">
-              <p className="text-xs text-gray-500">Reset Stock — {branchName}</p>
-              <label className="block text-xs text-gray-500">
-                จำนวนแถวใหม่
-                <input
-                  type="number"
-                  min={1}
-                  value={resetStock}
-                  onChange={(e) => setResetStock(e.target.value)}
-                  className="mt-1 w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400"
-                />
-              </label>
-              {sorted.length > 1 ? (
-                <div className="space-y-1">
-                  <p className="text-xs text-gray-400">เลือกเครื่อง</p>
-                  {sorted.map((p, i) => (
-                    <button
-                      key={p.printer_id}
-                      type="button"
-                      disabled={sending}
-                      onClick={() => void sendResetStock(i)}
-                      className="w-full text-left text-xs px-2 py-1.5 rounded-lg border border-gray-100 hover:bg-pink-50 disabled:opacity-50 truncate"
-                    >
-                      {i + 1}. {p.printer_name}
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  disabled={sending}
-                  onClick={() => void sendResetStock(0)}
-                  className="w-full text-xs font-medium text-white bg-pink-600 rounded-lg py-2 hover:bg-pink-700 disabled:opacity-50"
-                >
-                  ยืนยัน Reset Stock
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => setPickPrinter(null)}
-                className="w-full text-xs text-gray-400 py-1 hover:text-gray-600"
-              >
-                ← กลับ
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
+    <>
+      <div className="relative flex-shrink-0">
+        <button
+          ref={buttonRef}
+          type="button"
+          onClick={() => {
+            setMenuOpen((v) => {
+              if (v) {
+                setMode('menu')
+                setMenuPos(null)
+                return false
+              }
+              return true
+            })
+          }}
+          disabled={sending}
+          className="text-xs font-medium text-pink-700 bg-white border border-pink-200 px-2.5 py-1 rounded-lg hover:bg-pink-50 disabled:opacity-50 shadow-sm"
+        >
+          คำสั่ง
+        </button>
+      </div>
+      {menuDropdown}
+    </>
   )
 }
 
@@ -339,39 +371,33 @@ export function Printer() {
     return () => clearTimeout(t)
   }, [toast])
 
-  // Group by branch
+  // Group by branch — ซ่อนเครื่องที่ไม่ได้ report แล้ว (เช่น ลบออกจาก config)
+  const activeBranchGroups = useMemo(() => groupByBranch(data), [data])
+
   const branchGroups = useMemo(() => {
     const q = search.trim().toLowerCase()
-    const filtered = q
-      ? data.filter(
-          (r) =>
-            r.branch_name.toLowerCase().includes(q) ||
-            r.printer_name.toLowerCase().includes(q) ||
-            r.branch_id?.toLowerCase().includes(q)
-        )
-      : data
-
-    const map = new Map<string, PrinterRecord[]>()
-    filtered.forEach((r) => {
-      const key = r.branch_id ?? r.branch_name
-      if (!map.has(key)) map.set(key, [])
-      map.get(key)!.push(r)
+    if (!q) return activeBranchGroups
+    return activeBranchGroups.filter((printers) => {
+      const branch = printers[0]
+      return (
+        branch.branch_name.toLowerCase().includes(q) ||
+        branch.branch_id?.toLowerCase().includes(q) ||
+        printers.some((p) => p.printer_name.toLowerCase().includes(q))
+      )
     })
-    return Array.from(map.values()).sort((a, b) =>
-      a[0].branch_name.localeCompare(b[0].branch_name, 'th')
-    )
-  }, [data, search])
+  }, [activeBranchGroups, search])
 
-  // Summary counts
+  // Summary counts (นับเฉพาะเครื่องที่ยัง active)
   const summary = useMemo(() => {
-    const total = data.length
-    const normal = data.filter((r) => r.status === 'online' || r.status === 'printing').length
-    const problem = data.filter((r) => r.status !== 'online' && r.status !== 'printing').length
-    const monitorOffline = data.filter(
+    const active = activeBranchGroups.flat()
+    const total = active.length
+    const normal = active.filter((r) => r.status === 'online' || r.status === 'printing').length
+    const problem = active.filter((r) => r.status !== 'online' && r.status !== 'printing').length
+    const monitorOffline = active.filter(
       (r) => getMonitorHealth(minutesSince(r.timestamp)) === 'offline'
     ).length
     return { total, normal, problem, monitorOffline }
-  }, [data])
+  }, [activeBranchGroups])
 
   return (
     <div className="space-y-4">
@@ -404,7 +430,7 @@ export function Printer() {
       </div>
 
       {/* Summary cards */}
-      {!loading && data.length > 0 && (
+      {!loading && activeBranchGroups.length > 0 && (
         <div className="grid grid-cols-4 gap-2">
           <div className="bg-gray-50 border border-gray-200 rounded-xl p-3 text-center">
             <p className="text-xl">🖨️</p>
@@ -484,7 +510,7 @@ export function Printer() {
       )}
 
       {/* Search */}
-      {data.length > 0 && (
+      {activeBranchGroups.length > 0 && (
         <div className="relative">
           <input
             type="text"
@@ -525,7 +551,7 @@ export function Printer() {
       )}
 
       {/* No search results */}
-      {!loading && search && branchGroups.length === 0 && data.length > 0 && (
+      {!loading && search && branchGroups.length === 0 && activeBranchGroups.length > 0 && (
         <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center">
           <p className="text-3xl mb-2">🔍</p>
           <p className="text-gray-400 text-sm">ไม่พบสาขาที่ค้นหา</p>
@@ -546,7 +572,7 @@ export function Printer() {
             return (
               <section
                 key={branch.branch_id ?? branch.branch_name}
-                className={`bg-white rounded-2xl shadow-sm border overflow-hidden ${
+                className={`bg-white rounded-2xl shadow-sm border overflow-visible ${
                   monitorHealth === 'offline'
                     ? 'border-orange-300'
                     : hasProblem
@@ -573,14 +599,6 @@ export function Printer() {
                     </span>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    {branch.branch_id && (
-                      <BranchCommandMenu
-                        branchId={branch.branch_id}
-                        branchName={branch.branch_name}
-                        printers={printers}
-                        onToast={setToast}
-                      />
-                    )}
                     {monitorHealth === 'offline' && (
                       <span className="text-xs font-bold text-orange-700 bg-orange-100 border border-orange-300 px-2 py-0.5 rounded-full">
                         📡 Monitor ไม่ตอบ
@@ -597,14 +615,17 @@ export function Printer() {
 
                 {/* Printer rows */}
                 <div className="divide-y divide-gray-50">
-                  {printers.map((p) => {
+                  {sortPrinters(printers).map((p, printerIndex) => {
                     const cfg = STATUS_CONFIG[p.status] ?? STATUS_CONFIG.error
                     const mins = minutesSince(p.timestamp)
                     const health = getMonitorHealth(mins)
                     const isNormal = p.status === 'online' || p.status === 'printing'
 
                     return (
-                      <div key={p.printer_id} className="px-4 py-3 flex items-center gap-3">
+                      <div
+                        key={`${p.branch_id}__${p.printer_id}`}
+                        className="px-4 py-3 flex items-center gap-3"
+                      >
                         {/* Status dot */}
                         <span
                           className={`flex-shrink-0 w-2.5 h-2.5 rounded-full ${cfg.dot} ${
@@ -647,8 +668,17 @@ export function Printer() {
                           </div>
                         </div>
 
+                        {branch.branch_id && (
+                          <PrinterCommandMenu
+                            branchId={branch.branch_id}
+                            printer={p}
+                            printerIndex={printerIndex}
+                            onToast={setToast}
+                          />
+                        )}
+
                         {/* Timestamp */}
-                        <div className="text-right flex-shrink-0">
+                        <div className="text-right flex-shrink-0 min-w-[72px]">
                           <p
                             className={`text-xs font-medium ${
                               health === 'offline'
