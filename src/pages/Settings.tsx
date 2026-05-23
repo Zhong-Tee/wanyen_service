@@ -647,7 +647,7 @@ function BranchesTab() {
                 <div className="flex-1">
                   <label className="text-xs font-medium text-gray-500 mb-1 block">ค่าเช่า (บาท/เดือน)</label>
                   <input type="number" min="0" step="0.01" value={editRent} onChange={(e) => setEditRent(e.target.value)}
-                    placeholder="เช่น 5000"
+                    placeholder="เช่น 3846"
                     className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400" />
                 </div>
                 <div className="flex-1">

@@ -908,7 +908,7 @@ function ServiceReport() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-xs text-gray-400">คำนวณจากยอดขายเฉลี่ย 7 วัน vs สต๊อก "กำลังใช้"</p>
+        <p className="text-xs text-gray-400">คำนวณจากยอดขายเฉลี่ย 7 วันต่อสินค้า vs สต๊อก "กำลังใช้"</p>
         <button onClick={fetch} disabled={loading}
           className="flex items-center gap-1.5 text-xs text-pink-600 font-medium bg-pink-50 px-3 py-1.5 rounded-lg hover:bg-pink-100 disabled:opacity-50">
           <span className={loading ? 'animate-spin inline-block' : ''}>🔄</span>รีเฟรช
@@ -958,7 +958,18 @@ function ServiceReport() {
                   <div className="flex gap-2 mt-0.5 flex-wrap">
                     <span className="text-xs text-gray-500">สต๊อก <span className="font-semibold text-gray-700">{r.quantity.toLocaleString()}</span> แผ่น</span>
                     {r.avg_daily_sales > 0 && (
-                      <span className="text-xs text-blue-500">ยอดขายเฉลี่ย <span className="font-semibold">{r.avg_daily_sales % 1 === 0 ? r.avg_daily_sales.toFixed(0) : r.avg_daily_sales.toFixed(1)}</span> แผ่น</span>
+                      <span className="text-xs text-blue-500">
+                        ยอดขายเฉลี่ย{' '}
+                        <span className="font-semibold">
+                          {r.avg_daily_sales % 1 === 0 ? r.avg_daily_sales.toFixed(0) : r.avg_daily_sales.toFixed(1)}
+                        </span>{' '}
+                        แผ่น
+                      </span>
+                    )}
+                    {r.printer_sheets != null && (
+                      <span className="text-xs text-purple-600">
+                        PT <span className="font-semibold">{r.printer_sheets.toLocaleString()}</span> แผ่น
+                      </span>
                     )}
                   </div>
                 </div>

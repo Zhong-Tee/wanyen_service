@@ -140,6 +140,26 @@ export async function fetchSheetRows(): Promise<SheetRow[]> {
     .filter((r): r is SheetRow => r !== null)
 }
 
+/** สถานะ Online/Offline ต่อสาขา จาก snapshot ล่าสุดใน Sheet (col D) */
+export async function fetchBranchOnlineMap(): Promise<Map<string, 'online' | 'offline'>> {
+  const allRows = await fetchSheetRows()
+  if (allRows.length === 0) return new Map()
+
+  const maxDT = allRows.reduce((best, r) => (r.dateTime > best ? r.dateTime : best), '')
+  const snapshotRows = allRows.filter((r) => r.dateTime === maxDT)
+
+  const map = new Map<string, 'online' | 'offline'>()
+  for (const row of snapshotRows) {
+    const status: 'online' | 'offline' =
+      row.onlineStatus.toLowerCase() === 'offline' ? 'offline' : 'online'
+    const existing = map.get(row.branchNum)
+    if (!existing || status === 'offline') {
+      map.set(row.branchNum, status)
+    }
+  }
+  return map
+}
+
 export function parseAllRows(csv: string): SheetRow[] {
   const rows: SheetRow[] = []
   for (const line of csv.trim().split('\n').filter(Boolean)) {

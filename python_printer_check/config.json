@@ -35,12 +35,13 @@
       "name": "ปริ้นเตอร์ 1",
       "ip": "192.168.1.111",
       "snmp_community": "public",
+      "product_name": "ชื่อสินค้าให้ตรงกับในระบบ",
       "bartender_template": "C:/ST/app_cust_V.6/FormatSA.btw",
       "sticker": {
         "height_mm": 11,
         "gap_mm": 2,
-        "initial_stock": 5000,
-        "low_stock_threshold": 200,
+        "initial_stock": 3846,
+        "low_stock_threshold": 150,
         "stock_count_file": "stock_printer_01.json"
       }
     },
@@ -49,12 +50,13 @@
       "name": "ปริ้นเตอร์ 2",
       "ip": "192.168.1.112",
       "snmp_community": "public",
+      "product_name": "ชื่อสินค้าให้ตรงกับในระบบ",
       "bartender_template": "C:/ST/app_cust_V.6/FormatMH2.btw",
       "sticker": {
         "height_mm": 11,
         "gap_mm": 2,
-        "initial_stock": 5000,
-        "low_stock_threshold": 200,
+        "initial_stock": 3846,
+        "low_stock_threshold": 150,
         "stock_count_file": "stock_printer_02.json"
       }
     }

@@ -1,6 +1,12 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
+import { fetchBranchOnlineMap } from '../lib/sheetCSV'
+import {
+  DEFAULT_LOW_STOCK_THRESHOLD,
+  ROWS_PER_ROLL,
+  formatStickerStock,
+} from '../lib/stickerStock'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -114,7 +120,7 @@ function PrinterCommandMenu({
 }: PrinterCommandMenuProps) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [mode, setMode] = useState<'menu' | 'resetstock'>('menu')
-  const [resetStock, setResetStock] = useState('5000')
+  const [resetStock, setResetStock] = useState(String(ROWS_PER_ROLL))
   const [sending, setSending] = useState(false)
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
@@ -210,7 +216,7 @@ function PrinterCommandMenu({
         type: 'success',
       })
       closeAll()
-      setResetStock('5000')
+      setResetStock(String(ROWS_PER_ROLL))
     } catch (e: unknown) {
       onToast({
         message: e instanceof Error ? e.message : 'ส่งคำสั่งไม่สำเร็จ',
@@ -315,6 +321,9 @@ function PrinterCommandMenu({
 
 function usePrinterStatus() {
   const [data, setData] = useState<PrinterRecord[]>([])
+  const [branchOnlineMap, setBranchOnlineMap] = useState<Map<string, 'online' | 'offline'>>(
+    new Map()
+  )
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
@@ -323,15 +332,18 @@ function usePrinterStatus() {
     setLoading(true)
     setError(null)
     try {
-      // ดึง records ล่าสุด (order by timestamp DESC) แล้ว deduplicate per printer_id
-      // ใช้จำนวน 2000 รองรับ ~200 สาขา × 10 รอบ buffer ได้สบาย
-      const { data: rows, error: err } = await supabase
-        .from('printer_log')
-        .select(
-          'id, branch_id, branch_name, printer_id, printer_name, printer_ip, status, page_count, alert_msg, event, stock_remaining, timestamp'
-        )
-        .order('timestamp', { ascending: false })
-        .limit(2000)
+      const [printerResult, onlineMap] = await Promise.all([
+        supabase
+          .from('printer_log')
+          .select(
+            'id, branch_id, branch_name, printer_id, printer_name, printer_ip, status, page_count, alert_msg, event, stock_remaining, timestamp'
+          )
+          .order('timestamp', { ascending: false })
+          .limit(2000),
+        fetchBranchOnlineMap().catch(() => new Map<string, 'online' | 'offline'>()),
+      ])
+
+      const { data: rows, error: err } = printerResult
       if (err) throw err
 
       // เก็บแค่ record แรก (ล่าสุด) ของแต่ละ branch_id + printer_id คู่กัน
@@ -345,6 +357,7 @@ function usePrinterStatus() {
       })
 
       setData(latest)
+      setBranchOnlineMap(onlineMap)
       setLastRefresh(new Date())
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'โหลดข้อมูลไม่สำเร็จ')
@@ -355,13 +368,21 @@ function usePrinterStatus() {
 
   useEffect(() => { refresh() }, [refresh])
 
-  return { data, loading, error, lastRefresh, refresh }
+  return { data, branchOnlineMap, loading, error, lastRefresh, refresh }
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
+function isBranchMachineOffline(
+  branchId: string | null | undefined,
+  branchOnlineMap: Map<string, 'online' | 'offline'>
+): boolean {
+  if (!branchId) return false
+  return branchOnlineMap.get(branchId) === 'offline'
+}
+
 export function Printer() {
-  const { data, loading, error, lastRefresh, refresh } = usePrinterStatus()
+  const { data, branchOnlineMap, loading, error, lastRefresh, refresh } = usePrinterStatus()
   const [search, setSearch] = useState('')
   const [toast, setToast] = useState<Toast | null>(null)
 
@@ -396,8 +417,13 @@ export function Printer() {
     const monitorOffline = active.filter(
       (r) => getMonitorHealth(minutesSince(r.timestamp)) === 'offline'
     ).length
-    return { total, normal, problem, monitorOffline }
-  }, [activeBranchGroups])
+    const machineOffline = new Set(
+      active
+        .filter((r) => isBranchMachineOffline(r.branch_id, branchOnlineMap))
+        .map((r) => r.branch_id)
+    ).size
+    return { total, normal, problem, monitorOffline, machineOffline }
+  }, [activeBranchGroups, branchOnlineMap])
 
   return (
     <div className="space-y-4">
@@ -565,6 +591,7 @@ export function Printer() {
             const branch = printers[0]
             const maxMins = Math.max(...printers.map((p) => minutesSince(p.timestamp)))
             const monitorHealth = getMonitorHealth(maxMins)
+            const machineOffline = isBranchMachineOffline(branch.branch_id, branchOnlineMap)
             const hasProblem = printers.some(
               (p) => p.status !== 'online' && p.status !== 'printing'
             )
@@ -573,7 +600,9 @@ export function Printer() {
               <section
                 key={branch.branch_id ?? branch.branch_name}
                 className={`bg-white rounded-2xl shadow-sm border overflow-visible ${
-                  monitorHealth === 'offline'
+                  machineOffline
+                    ? 'border-red-300'
+                    : monitorHealth === 'offline'
                     ? 'border-orange-300'
                     : hasProblem
                     ? 'border-red-200'
@@ -583,7 +612,9 @@ export function Printer() {
                 {/* Branch header */}
                 <div
                   className={`px-4 py-3 border-b flex items-center justify-between gap-2 ${
-                    monitorHealth === 'offline'
+                    machineOffline
+                      ? 'bg-red-50 border-red-200'
+                      : monitorHealth === 'offline'
                       ? 'bg-orange-50 border-orange-200'
                       : hasProblem
                       ? 'bg-red-50 border-red-100'
@@ -599,12 +630,17 @@ export function Printer() {
                     </span>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
-                    {monitorHealth === 'offline' && (
+                    {machineOffline && (
+                      <span className="text-xs font-bold text-red-700 bg-red-100 border border-red-300 px-2 py-0.5 rounded-full">
+                        📴 เครื่อง Offline
+                      </span>
+                    )}
+                    {!machineOffline && monitorHealth === 'offline' && (
                       <span className="text-xs font-bold text-orange-700 bg-orange-100 border border-orange-300 px-2 py-0.5 rounded-full">
                         📡 Monitor ไม่ตอบ
                       </span>
                     )}
-                    {monitorHealth === 'warning' && (
+                    {!machineOffline && monitorHealth === 'warning' && (
                       <span className="text-xs font-bold text-yellow-700 bg-yellow-100 border border-yellow-300 px-2 py-0.5 rounded-full">
                         ⏱ ช้ากว่าปกติ
                       </span>
@@ -616,10 +652,15 @@ export function Printer() {
                 {/* Printer rows */}
                 <div className="divide-y divide-gray-50">
                   {sortPrinters(printers).map((p, printerIndex) => {
-                    const cfg = STATUS_CONFIG[p.status] ?? STATUS_CONFIG.error
+                    const effectiveStatus: PrinterStatusKey = machineOffline
+                      ? 'offline'
+                      : p.status
+                    const cfg = STATUS_CONFIG[effectiveStatus] ?? STATUS_CONFIG.error
                     const mins = minutesSince(p.timestamp)
                     const health = getMonitorHealth(mins)
-                    const isNormal = p.status === 'online' || p.status === 'printing'
+                    const isNormal =
+                      !machineOffline &&
+                      (p.status === 'online' || p.status === 'printing')
 
                     return (
                       <div
@@ -650,11 +691,13 @@ export function Printer() {
                             {p.stock_remaining != null && (
                               <span
                                 className={`text-xs font-medium ${
-                                  p.stock_remaining <= 200 ? 'text-red-500' : 'text-gray-500'
+                                  p.stock_remaining <= DEFAULT_LOW_STOCK_THRESHOLD
+                                    ? 'text-red-500'
+                                    : 'text-gray-500'
                                 }`}
                               >
-                                📦 {p.stock_remaining.toLocaleString()} แถว
-                                {p.stock_remaining <= 200 && ' ⚠️'}
+                                📦 {formatStickerStock(p.stock_remaining)}
+                                {p.stock_remaining <= DEFAULT_LOW_STOCK_THRESHOLD && ' ⚠️'}
                               </span>
                             )}
                             {p.alert_msg && (

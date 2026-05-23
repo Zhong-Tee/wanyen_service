@@ -571,11 +571,11 @@ class SupabaseLogger:
     def log(self, branch_id: str, branch_name: str,
             printer_id: str, printer_name: str, printer_ip: str,
             status: str, page_count, alert_msg: str,
-            event: str, stock_remaining=None):
+            event: str, stock_remaining=None, product_name=None):
         if not self.client:
             return
         try:
-            self.client.table(self.table_name).insert({
+            row = {
                 "branch_id":       branch_id,
                 "branch_name":     branch_name,
                 "printer_id":      printer_id,
@@ -587,7 +587,10 @@ class SupabaseLogger:
                 "event":           event,
                 "stock_remaining": stock_remaining,
                 "timestamp":       datetime.now(timezone.utc).isoformat(),
-            }).execute()
+            }
+            if product_name:
+                row["product_name"] = product_name
+            self.client.table(self.table_name).insert(row).execute()
         except Exception as e:
             log_err(f"[Supabase ERROR] log: {e}")
 
@@ -837,6 +840,7 @@ class PrinterWorker:
             alert_msg       = info["alert_msg"],
             event           = event,
             stock_remaining = remaining,
+            product_name    = self.cfg.get("product_name") or None,
         )
         self.last_log_time = time.time()
 

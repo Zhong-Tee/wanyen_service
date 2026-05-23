@@ -1,4 +1,5 @@
 import { supabase } from './supabase'
+import { fetchBranchProductPrinterSheetsLookup } from './printerStock'
 
 export interface ServiceRow {
   branch_name: string
@@ -6,6 +7,7 @@ export interface ServiceRow {
   quantity: number
   avg_daily_sales: number
   days_remaining: number
+  printer_sheets: number | null
 }
 
 function last7DayRange() {
@@ -21,38 +23,47 @@ function last7DayRange() {
   return { from: fmt(sevenDaysAgo), to: fmt(today) }
 }
 
-/** ดึงและคำนวณรายการ Service จากสต๊อก + ยอดขาย 7 วัน */
+function branchProductSalesKey(branchName: string, productName: string): string {
+  return `${branchName.trim()}__${productName.trim().toLowerCase()}`
+}
+
+/** ดึงและคำนวณรายการ Service จากสต๊อก + ยอดขาย 7 วัน (แยกตามสินค้า) */
 export async function fetchServiceRows(): Promise<ServiceRow[]> {
   const { from, to } = last7DayRange()
 
-  const [stockRes, salesRes] = await Promise.all([
+  const [stockRes, salesRes, printerLookup] = await Promise.all([
     supabase
       .from('branch_stock_view')
       .select('branch_name, product_name, quantity')
       .eq('status', 'กำลังใช้'),
     supabase
-      .from('daily_sales_summary')
-      .select('branch_name, report_date, total_qty')
+      .from('daily_sales_report')
+      .select('branch_name, product_name, report_date, quantity')
       .gte('report_date', from)
       .lte('report_date', to)
-      .limit(5000),
+      .limit(50000),
+    fetchBranchProductPrinterSheetsLookup().catch(() => null),
   ])
 
   if (stockRes.error) throw new Error(stockRes.error.message)
   if (salesRes.error) throw new Error(salesRes.error.message)
 
-  const salesByBranch = new Map<string, { totalQty: number; days: Set<string> }>()
+  const salesByBranchProduct = new Map<string, { totalQty: number; days: Set<string> }>()
   for (const r of salesRes.data ?? []) {
-    const name = r.branch_name as string | null
-    if (!name) continue
-    if (!salesByBranch.has(name)) salesByBranch.set(name, { totalQty: 0, days: new Set() })
-    const entry = salesByBranch.get(name)!
-    entry.totalQty += Number(r.total_qty ?? 0)
+    const branch = r.branch_name as string | null
+    const product = r.product_name as string | null
+    if (!branch || !product) continue
+    const key = branchProductSalesKey(branch, product)
+    if (!salesByBranchProduct.has(key)) {
+      salesByBranchProduct.set(key, { totalQty: 0, days: new Set() })
+    }
+    const entry = salesByBranchProduct.get(key)!
+    entry.totalQty += Number(r.quantity ?? 0)
     entry.days.add(r.report_date as string)
   }
 
   const avgMap = new Map<string, number>()
-  salesByBranch.forEach((v, k) => {
+  salesByBranchProduct.forEach((v, k) => {
     const dayCount = v.days.size || 7
     avgMap.set(k, v.totalQty / dayCount)
   })
@@ -63,9 +74,10 @@ export async function fetchServiceRows(): Promise<ServiceRow[]> {
       const branch_name = s.branch_name as string
       const product_name = s.product_name as string
       const quantity = Number(s.quantity ?? 0)
-      const avg_daily_sales = avgMap.get(branch_name) ?? 0
+      const avg_daily_sales = avgMap.get(branchProductSalesKey(branch_name, product_name)) ?? 0
       const days_remaining = avg_daily_sales > 0 ? Math.floor(quantity / avg_daily_sales) : 9999
-      return { branch_name, product_name, quantity, avg_daily_sales, days_remaining }
+      const printer_sheets = printerLookup?.get(branch_name, product_name) ?? null
+      return { branch_name, product_name, quantity, avg_daily_sales, days_remaining, printer_sheets }
     })
 
   result.sort((a, b) => a.days_remaining - b.days_remaining)
