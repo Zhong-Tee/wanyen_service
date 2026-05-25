@@ -2,8 +2,8 @@
   "_comment": "คัดลอกไฟล์นี้ไปติดตั้งแต่ละเครื่อง แล้วแก้ค่าให้ตรงกับสาขา/เครื่องปริ้นของตัวเอง",
 
   "branch": {
-    "id": "02",
-    "name": "02 WY CPN EVL FL.2"
+    "id": "100",
+    "name": "100 B2S RBS Samutpakarn"
   },
 
   "telegram": {
@@ -70,5 +70,14 @@
   },
 
   "check_interval": 60,
-  "log_interval": 300
+  "log_interval": 300,
+
+  "kiosk": {
+    "_comment": "เปลี่ยน UI จากหน้า Stock — path ใช้ / ไม่ใช่ \\ เช่น E:/folder/app_cust_V.6",
+    "app_dir": "E:/Wanyen Kiosk V.2/Install WanyenKiosk V2/4.folder program/app_cust_V.6",
+    "exe_name": "st_sticker.exe",
+    "ui_rebuild_dir": "E:/Wanyen Kiosk V.2/Install WanyenKiosk V2/7.UI Build&Poin/UI Rebuild/Rebuild B2S",
+    "close_timeout_sec": 10,
+    "start_timeout_sec": 15
+  }
 }

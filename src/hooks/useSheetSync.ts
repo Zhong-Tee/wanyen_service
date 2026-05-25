@@ -37,8 +37,10 @@ export function useSheetSync() {
   const [syncError, setSyncError] = useState<string | null>(null)
   const [result, setResult] = useState<SyncResult | null>(null)
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const syncGenRef = useRef(0)
 
   const sync = useCallback(async () => {
+    const syncId = ++syncGenRef.current
     setSyncing(true)
     setSyncError(null)
     try {
@@ -67,10 +69,26 @@ export function useSheetSync() {
         supabase.from('branch_stock').select('id, branch_id, product_id, status'),
       ])
 
+      const dbErrors = [
+        brRes.error && `branches: ${brRes.error.message}`,
+        prRes.error && `products: ${prRes.error.message}`,
+        stRes.error && `branch_stock: ${stRes.error.message}`,
+      ].filter(Boolean) as string[]
+
+      if (dbErrors.length > 0) {
+        throw new Error(`โหลดข้อมูล Supabase ไม่สำเร็จ — ${dbErrors.join('; ')}`)
+      }
+
       const branches = brRes.data ?? []
       const products = prRes.data ?? []
       const allStock = stRes.data ?? []
       const activeStock = allStock.filter((s) => s.status === 'กำลังใช้')
+
+      if (branches.length === 0) {
+        throw new Error(
+          'ไม่พบข้อมูลสาขาใน Supabase — ตรวจสอบการเชื่อมต่อหรือลองกดซิงค์อีกครั้ง'
+        )
+      }
 
       // ── 5. Lookup maps ────────────────────────────────────────────────
       const branchByNum = new Map<string, { id: string; name: string }>()
@@ -174,13 +192,15 @@ export function useSheetSync() {
       const sheetDataTime = latestRow?.timeRaw ?? ''
 
       console.log(`[SheetSync] done — updated: ${updates.length}, unmatched: ${unmatched.length}`)
+      if (syncId !== syncGenRef.current) return
       setResult({ updatedCount: updates.length, unmatched, lastSync: new Date(), sheetDataDate, sheetDataTime, diag })
     } catch (err) {
+      if (syncId !== syncGenRef.current) return
       const msg = err instanceof Error ? err.message : 'เกิดข้อผิดพลาดไม่ทราบสาเหตุ'
       console.error('[SheetSync] error:', err)
       setSyncError(msg)
     } finally {
-      setSyncing(false)
+      if (syncId === syncGenRef.current) setSyncing(false)
     }
   }, [])
 

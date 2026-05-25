@@ -11,6 +11,7 @@ import subprocess
 import sys
 import os
 import logging
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -25,14 +26,19 @@ CONFIG_FILE = BASE_DIR / "config.json"
 LOG_FILE    = BASE_DIR / "printer_monitor.log"
 
 # ── File logger (สำคัญมากเมื่อรันเป็น --noconsole) ──────────────────────────
+_log_handlers = [logging.FileHandler(LOG_FILE, encoding="utf-8")]
+if sys.stdout:
+    try:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+    _log_handlers.append(logging.StreamHandler(sys.stdout))
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
+    handlers=_log_handlers,
 )
 logger_sys = logging.getLogger("printer_monitor")
 
@@ -44,6 +50,38 @@ def log(msg: str):
 
 def log_err(msg: str):
     logger_sys.error(msg)
+
+
+def _subprocess_hide_window_kwargs() -> dict:
+    """Windows: ซ่อนหน้าต่าง cmd ชั่วคราวตอน tasklist / taskkill / ฯลฯ"""
+    if sys.platform != "win32":
+        return {}
+    return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+
+
+def _fatal_startup(msg: str, code: int = 1):
+    """แจ้ง error แล้วค่อยปิด — กัน double-click แล้วหายไปทันที"""
+    log_err(msg)
+    for h in logger_sys.handlers:
+        try:
+            h.flush()
+        except Exception:
+            pass
+    if getattr(sys, "frozen", False):
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0, msg, "Printer Monitor", 0x10)
+        except Exception:
+            pass
+        time.sleep(8)
+    else:
+        try:
+            print(msg, file=sys.stderr)
+            input("กด Enter เพื่อปิด...")
+        except Exception:
+            time.sleep(8)
+    sys.exit(code)
 
 
 # ── Third-party imports (optional graceful fallback) ──────────────────────────
@@ -65,19 +103,29 @@ except ImportError:
 try:
     from supabase import create_client
     SUPABASE_AVAILABLE = True
-except ImportError:
+except Exception as e:
     SUPABASE_AVAILABLE = False
+    log_err(f"supabase โหลดไม่ได้ — {e}")
 
 
 def load_config() -> dict:
     log(f"BASE_DIR = {BASE_DIR}")
     log(f"CONFIG_FILE = {CONFIG_FILE}")
     if not CONFIG_FILE.exists():
-        log_err(f"ไม่พบไฟล์ config: {CONFIG_FILE}")
-        log_err("กรุณาวาง config.json ไว้ในโฟลเดอร์เดียวกับ printer_monitor.exe")
-        sys.exit(1)
-    with open(CONFIG_FILE, "r", encoding="utf-8-sig") as f:
-        return json.load(f)
+        _fatal_startup(
+            f"ไม่พบ config.json\n\nวางไฟล์ config.json ไว้ในโฟลเดอร์:\n{BASE_DIR}"
+        )
+    try:
+        with open(CONFIG_FILE, "r", encoding="utf-8-sig") as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        hint = ""
+        if "Invalid \\escape" in str(e):
+            hint = (
+                "\n\n💡 path Windows ใน JSON ต้องใช้ / แทน \\ "
+                "เช่น E:/Wanyen Kiosk/... หรือ escape เป็น \\\\"
+            )
+        _fatal_startup(f"config.json อ่านไม่ได้ (JSON ผิดรูปแบบ):\n{e}{hint}")
 
 
 # ── SNMP OIDs (RFC-1759 Printer MIB) ─────────────────────────────────────────
@@ -546,7 +594,10 @@ class BartenderPrint:
             cmd.append(f'/PRN={printer_name}')
 
         try:
-            result = subprocess.run(cmd, timeout=30, capture_output=True)
+            result = subprocess.run(
+                cmd, timeout=30, capture_output=True,
+                **_subprocess_hide_window_kwargs(),
+            )
             if result.returncode == 0:
                 return True, f"สั่งพิมพ์ {copies} ใบ สำเร็จ"
             return False, f"Bartender ส่งคืน exit code: {result.returncode}"
@@ -554,6 +605,159 @@ class BartenderPrint:
             return False, "Timeout — Bartender ใช้เวลานานเกินไป"
         except Exception as e:
             return False, str(e)
+
+
+# ── Kiosk UI Changer (st_sticker.exe) ─────────────────────────────────────────
+class KioskUIChanger:
+    """
+    ปิด st_sticker.exe → คัดลอก UI จากโฟลเดอร์ rebuild → เปิดโปรแกรมใหม่
+    path กำหนดใน config.json → kiosk
+    """
+
+    def __init__(self, cfg: dict = None):
+        cfg = cfg or {}
+        self.app_dir = Path(cfg.get("app_dir", "")).expanduser()
+        exe_name = cfg.get("exe_name", "st_sticker.exe")
+        self.exe_path = self.app_dir / exe_name
+        self.ui_rebuild_dir = Path(cfg.get("ui_rebuild_dir", "")).expanduser()
+        self.close_timeout_sec = int(cfg.get("close_timeout_sec", 15))
+        self.start_timeout_sec = int(cfg.get("start_timeout_sec", 10))
+        self.enabled = bool(str(cfg.get("app_dir", "")).strip())
+
+    @property
+    def exe_name(self) -> str:
+        return self.exe_path.name
+
+    def _is_running(self) -> bool:
+        if sys.platform != "win32":
+            return False
+        try:
+            result = subprocess.run(
+                ["tasklist", "/FI", f"IMAGENAME eq {self.exe_name}", "/NH"],
+                capture_output=True, text=True, timeout=10,
+                **_subprocess_hide_window_kwargs(),
+            )
+            return self.exe_name.lower() in result.stdout.lower()
+        except Exception:
+            return False
+
+    def _kill_app(self):
+        if not self._is_running():
+            log(f"[KioskUI] {self.exe_name} ไม่ได้รันอยู่ — ข้ามการปิด")
+            return
+        if sys.platform != "win32":
+            raise RuntimeError("รองรับเฉพาะ Windows")
+        subprocess.run(
+            ["taskkill", "/F", "/IM", self.exe_name],
+            capture_output=True, text=True, timeout=15,
+            **_subprocess_hide_window_kwargs(),
+        )
+        deadline = time.time() + self.close_timeout_sec
+        while time.time() < deadline:
+            if not self._is_running():
+                log(f"[KioskUI] ปิด {self.exe_name} สำเร็จ")
+                return
+            time.sleep(0.5)
+        raise RuntimeError(
+            f"ปิด {self.exe_name} ไม่สำเร็จภายใน {self.close_timeout_sec} วินาที"
+        )
+
+    def _find_ui_folder(self, product_name: str) -> Path:
+        if not self.ui_rebuild_dir.is_dir():
+            raise FileNotFoundError(
+                f"ไม่พบโฟลเดอร์ UI rebuild: {self.ui_rebuild_dir}"
+            )
+        name = product_name.strip()
+        if not name:
+            raise ValueError("ไม่ได้ระบุชื่อสินค้า")
+        exact = self.ui_rebuild_dir / name
+        if exact.is_dir():
+            return exact
+        name_lower = name.lower()
+        for child in self.ui_rebuild_dir.iterdir():
+            if child.is_dir() and child.name.lower() == name_lower:
+                return child
+        available = sorted(
+            c.name for c in self.ui_rebuild_dir.iterdir() if c.is_dir()
+        )[:8]
+        hint = f" (มี: {', '.join(available)}...)" if available else ""
+        raise FileNotFoundError(
+            f"ไม่พบโฟลเดอร์ UI ชื่อ '{name}' ใน {self.ui_rebuild_dir}{hint}"
+        )
+
+    def _copy_ui(self, src_dir: Path):
+        if not self.app_dir.is_dir():
+            raise FileNotFoundError(f"ไม่พบโฟลเดอร์โปรแกรม: {self.app_dir}")
+        file_count = 0
+        for item in src_dir.rglob("*"):
+            if not item.is_file():
+                continue
+            rel = item.relative_to(src_dir)
+            target = self.app_dir / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, target)
+            file_count += 1
+        if file_count == 0:
+            raise RuntimeError(f"โฟลเดอร์ UI ว่างเปล่า: {src_dir}")
+        log(f"[KioskUI] คัดลอก {file_count} ไฟล์จาก {src_dir.name} → {self.app_dir}")
+
+    def _start_app(self):
+        if not self.exe_path.is_file():
+            raise FileNotFoundError(f"ไม่พบโปรแกรม: {self.exe_path}")
+        subprocess.Popen(
+            [str(self.exe_path)],
+            cwd=str(self.app_dir),
+            shell=False,
+            **_subprocess_hide_window_kwargs(),
+        )
+        deadline = time.time() + self.start_timeout_sec
+        while time.time() < deadline:
+            if self._is_running():
+                log(f"[KioskUI] เปิด {self.exe_name} สำเร็จ")
+                return
+            time.sleep(0.5)
+        raise RuntimeError(
+            f"เปิด {self.exe_name} แล้วแต่ไม่พบ process ภายใน "
+            f"{self.start_timeout_sec} วินาที"
+        )
+
+    def change_ui(self, product_name: str) -> tuple:
+        """
+        คืน (success: bool, message: str, step: str)
+        step = ขั้นที่ล้มเหลว หรือ 'done' เมื่อสำเร็จ
+        """
+        if not self.enabled:
+            return False, "ไม่ได้กำหนด kiosk.app_dir ใน config.json", "config"
+
+        try:
+            self._kill_app()
+        except Exception as e:
+            log_err(f"[KioskUI ERROR] step=close_app: {e}")
+            return False, str(e), "close_app"
+
+        try:
+            ui_src = self._find_ui_folder(product_name)
+        except Exception as e:
+            log_err(f"[KioskUI ERROR] step=find_ui: {e}")
+            return False, str(e), "find_ui"
+
+        try:
+            self._copy_ui(ui_src)
+        except Exception as e:
+            log_err(f"[KioskUI ERROR] step=copy_ui: {e}")
+            return False, str(e), "copy_ui"
+
+        try:
+            self._start_app()
+        except Exception as e:
+            log_err(f"[KioskUI ERROR] step=start_app: {e}")
+            return False, str(e), "start_app"
+
+        msg = (
+            f"เปลี่ยน UI '{product_name.strip()}' สำเร็จ "
+            f"({ui_src.name} → {self.app_dir})"
+        )
+        return True, msg, "done"
 
 
 # ── Supabase Logger ───────────────────────────────────────────────────────────
@@ -851,17 +1055,29 @@ class PrinterWorker:
         return self.bartender.print_template(template, self.cfg["name"], copies)
 
 
+# ขั้นตอนเปลี่ยน UI — ใช้ใน error message
+CHANGE_UI_STEP_LABELS = {
+    "close_app": "ปิดโปรแกรม",
+    "find_ui":   "ค้นหาโฟลเดอร์ UI",
+    "copy_ui":   "คัดลอกไฟล์",
+    "start_app": "เปิดโปรแกรม",
+    "config":    "ตั้งค่า",
+}
+
+
 # ── Command Executor ──────────────────────────────────────────────────────────
 class CommandExecutor:
-    """รันคำสั่ง Telegram สำหรับสาขานี้"""
+    """รันคำสั่ง Telegram / Web queue สำหรับสาขานี้"""
 
     def __init__(self, telegram: TelegramNotifier,
                  printers: list, branch: dict,
-                 require_branch: bool = True):
+                 require_branch: bool = True,
+                 kiosk_changer: KioskUIChanger = None):
         self.telegram       = telegram
         self.printers       = printers
         self.branch         = branch
         self.require_branch = require_branch
+        self.kiosk_changer  = kiosk_changer
         self.my_branch_id   = _norm_branch_id(branch["id"])
 
     def error_message(self, error: str, cmd: str = None) -> str:
@@ -909,6 +1125,8 @@ class CommandExecutor:
             self._cmd_testprint(args[0], args[1])
         elif cmd == "resetstock":
             self._cmd_reset_stock(args[0], args[1])
+        elif cmd == "changeui":
+            self._cmd_changeui(args[0] if args else "")
         return True
 
     def run_from_text(self, text: str) -> bool:
@@ -994,6 +1212,25 @@ class CommandExecutor:
         self.telegram.send(
             f"✅ รีเซ็ตสต็อก <b>{pw.cfg['name']}</b> ({self.branch['name']})\n"
             f"📦 สต็อกใหม่: {pw.stock.get_remaining():,} แถว"
+        )
+
+    def _cmd_changeui(self, product_name):
+        if not self.kiosk_changer or not self.kiosk_changer.enabled:
+            raise RuntimeError(
+                "[ตั้งค่า] ไม่ได้กำหนด kiosk.app_dir ใน config.json"
+            )
+        name = str(product_name).strip() if product_name is not None else ""
+        ok, msg, step = self.kiosk_changer.change_ui(name)
+        if not ok:
+            label = CHANGE_UI_STEP_LABELS.get(step, step)
+            raise RuntimeError(f"[{label}] {msg}")
+        log(f"[changeui] {msg}")
+        self.telegram.send(
+            f"✅ <b>เปลี่ยน UI สำเร็จ</b>\n"
+            f"🏪 สาขา: <b>{self.branch['name']}</b>\n"
+            f"🏷️ สินค้า: {name}\n"
+            f"📝 {msg}\n"
+            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
         )
 
     def _cmd_help(self):
@@ -1220,6 +1457,7 @@ def main():
     tg_cfg         = cfg.get("telegram", {})
     sb_cfg         = cfg.get("supabase", {})
     bt_cfg         = cfg.get("bartender", {})
+    kiosk_cfg      = cfg.get("kiosk", {})
     check_interval = int(cfg.get("check_interval", 60))
     log_interval   = int(cfg.get("log_interval", 300))
 
@@ -1238,6 +1476,7 @@ def main():
     command_queue = SupabaseCommandQueue(
         sb_cfg.get("url", ""), sb_cfg.get("key", ""))
     bartender = BartenderPrint(bt_cfg.get("exe_path", ""))
+    kiosk_changer = KioskUIChanger(kiosk_cfg)
 
     # ── Init printer workers ───────────────────────────────────────────────
     alert_cfg = cfg.get("alert", {})
@@ -1249,12 +1488,14 @@ def main():
 
     is_hub_only = command_hub and not printers
     if not printers and not command_hub:
-        log_err("ไม่มี printers ใน config.json")
-        log_err("หรือตั้ง telegram.command_hub = true สำหรับเครื่องรับคำสั่งกลาง")
-        sys.exit(1)
+        _fatal_startup(
+            "config.json ไม่มี printers และ command_hub ไม่ได้เปิด\n\n"
+            "สาขา: ใส่ printers\n"
+            "Hub: ตั้ง telegram.command_hub = true (printers ว่างได้)"
+        )
 
     cmd_executor = CommandExecutor(
-        telegram, printers, branch, require_branch)
+        telegram, printers, branch, require_branch, kiosk_changer)
     hub_handler = None
     queue_poller = None
     direct_handler = None
@@ -1262,8 +1503,9 @@ def main():
     # ── Telegram: Hub (เครื่องเดียว — 160 สาขาใช้ bot/group เดียวกัน) ───
     if command_hub:
         if not command_queue.available:
-            log_err("command_hub ต้องใช้ Supabase — รัน migration 014 ก่อน")
-            sys.exit(1)
+            _fatal_startup(
+                "command_hub ต้องใช้ Supabase — ตรวจ url/key และ migration 014"
+            )
         hub_handler = TelegramHub(
             telegram, command_queue, require_branch, branch.get("id"))
         hub_handler.start()
@@ -1337,10 +1579,12 @@ if __name__ == "__main__":
         main()
     except Exception as exc:
         import traceback
+        err_text = traceback.format_exc()
         log_err("=" * 60)
         log_err("โปรแกรม crash ด้วย error:")
-        log_err(traceback.format_exc())
+        log_err(err_text)
         log_err("=" * 60)
-        # รอสักครู่เพื่อให้ log file flush ก่อนปิด
-        time.sleep(2)
-        sys.exit(1)
+        _fatal_startup(
+            f"Printer Monitor หยุดทำงานด้วย error:\n\n{exc}\n\n"
+            f"ดูรายละเอียดใน:\n{LOG_FILE}"
+        )

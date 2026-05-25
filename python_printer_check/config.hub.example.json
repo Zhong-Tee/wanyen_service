@@ -1,14 +1,19 @@
 {
-  "_comment": "ตัวอย่าง config สาขาที่เป็น Hub + มีปริ้นเตอร์ 2 เครื่อง",
-  "_comment2": "command_hub: true ได้แค่ 1 เครื่องในระบบ — 159 สาขาที่เหลือใช้ config.json (command_hub: false)",
-  "_comment3": "นำไฟล์นี้ไปใช้จริง: copy แล้ว rename เป็น config.json ในโฟลเดอร์เดียวกับ printer_monitor.exe (UTF-8 ได้ทั้งแบบมี/ไม่มี BOM)",
+  "_comment": "ตัวอย่าง config เครื่อง Hub (รับคำสั่ง Telegram + หน้าเว็บ → ใส่ printer_command_queue)",
+  "_comment2": "command_hub: true ได้แค่ 1 เครื่องในระบบ — สาขาที่เหลือใช้ config.json (command_hub: false)",
+  "_comment3": "คำสั่ง changeui จากหน้า Stock ส่งเข้า queue แล้วให้ printer_monitor ที่สาขานั้นรัน (ไม่ใช่ Hub เป็นคน copy UI ให้สาขาอื่น)",
+  "_comment4": "นำไฟล์นี้ไปใช้จริง: copy แล้ว rename เป็น config.json ในโฟลเดอร์เดียวกับ printer_monitor.exe (UTF-8 ได้ทั้งแบบมี/ไม่มี BOM)",
+  "_comment5": "Hub อย่างเดียว (ไม่ monitor ปริ้น): ตั้ง printers เป็น [] — ดู _comment6 ด้านล่าง",
 
   "branch": {
+    "_comment": "id ต้องตรงเลขสาขาในระบบ — Hub ที่เป็นสาขาด้วยจะ poll queue ของ branch id นี้ด้วย",
     "id": "18",
     "name": "18 WY QSK Hub"
   },
 
   "telegram": {
+    "_comment_mode": "command_mode: branch — Hub + สาขา local ยัง poll queue ของ branch.id ตัวเอง",
+    "_comment_hub": "command_hub: true = รับ /status /testprint /resetstock จาก Telegram แล้ว enqueue ให้สาขา",
     "bot_token": "8819195951:AAGao6LeM4Btfe39bfdxR0Dyf4kYJafRB4c",
     "chat_id": "-5256056032",
     "command_mode": "branch",
@@ -18,22 +23,25 @@
   },
 
   "supabase": {
+    "_comment": "Hub ต้องเชื่อม Supabase — ใช้ queue + printer_log (migration 014 ขึ้นไป)",
     "url": "https://ljbvhppbcdczghxnvebt.supabase.co",
     "key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxqYnZocHBiY2RjemdoeG52ZWJ0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwNDIzNzQsImV4cCI6MjA5NDYxODM3NH0.4Qk5J0PctP7ea0yHjEkjr4sziN8_WEs-rnshctwIkgU",
     "table_name": "printer_log"
   },
 
   "bartender": {
-    "_comment": "path ของ bartend.exe — ปรับตามเวอร์ชันที่ติดตั้ง",
+    "_comment": "ใช้เมื่อ Hub เป็นสาขาที่มีปริ้น — Hub อย่างเดียว (printers: []) ไม่จำเป็น",
     "exe_path": "C:/Program Files (x86)/Seagull/BarTender 7.10/Trial/bartend.exe"
   },
 
+  "_comment6": "Hub อย่างเดียว: เปลี่ยนเป็น \"printers\": [] แล้วลบ product_name/sticker ออก",
   "printers": [
     {
       "id": "printer_01",
       "name": "Printer_01",
       "ip": "192.168.1.111",
       "snmp_community": "public",
+      "product_name": "ชื่อสินค้าให้ตรงกับในระบบ",
       "bartender_template": "C:/ST/app_cust_V.6/FormatSA.btw",
       "sticker": {
         "height_mm": 11,
@@ -48,6 +56,7 @@
       "name": "Printer_02",
       "ip": "192.168.1.112",
       "snmp_community": "public",
+      "product_name": "ชื่อสินค้าให้ตรงกับในระบบ",
       "bartender_template": "C:/ST/app_cust_V.6/FormatMH2.btw",
       "sticker": {
         "height_mm": 11,
@@ -67,5 +76,16 @@
   },
 
   "check_interval": 60,
-  "log_interval": 300
+  "log_interval": 300,
+
+  "kiosk": {
+    "_comment": "Hub ส่วนใหญ่ไม่ต้องตั้ง — คำสั่ง changeui รันที่เครื่องสาขาที่มี st_sticker",
+    "_comment2": "ใส่ path เฉพาะเมื่อ Hub เป็นสาขานี้และมี kiosk บนเครื่องเดียวกัน",
+    "_comment3": "โฟลเดอร์ UI ใน ui_rebuild_dir ต้องชื่อตรงชื่อสินค้า เช่น B2S-S2 — path ใช้ / ไม่ใช่ \\",
+    "app_dir": "",
+    "exe_name": "st_sticker.exe",
+    "ui_rebuild_dir": "",
+    "close_timeout_sec": 10,
+    "start_timeout_sec": 15
+  }
 }

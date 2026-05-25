@@ -652,15 +652,11 @@ export function Printer() {
                 {/* Printer rows */}
                 <div className="divide-y divide-gray-50">
                   {sortPrinters(printers).map((p, printerIndex) => {
-                    const effectiveStatus: PrinterStatusKey = machineOffline
-                      ? 'offline'
-                      : p.status
-                    const cfg = STATUS_CONFIG[effectiveStatus] ?? STATUS_CONFIG.error
+                    const cfg = STATUS_CONFIG[p.status] ?? STATUS_CONFIG.error
                     const mins = minutesSince(p.timestamp)
                     const health = getMonitorHealth(mins)
                     const isNormal =
-                      !machineOffline &&
-                      (p.status === 'online' || p.status === 'printing')
+                      p.status === 'online' || p.status === 'printing'
 
                     return (
                       <div
