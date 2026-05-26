@@ -202,6 +202,26 @@ _HTTP_STATUS_KEYWORDS = [
     ("error",         STATUS_ERROR),
 ]
 
+# endpoint ที่มักคืนสถานะสด (หลังกด Refresh บนหน้าเว็บ)
+_TSC_LIVE_PATHS = [
+    "/cgi-bin/status.cgi",
+    "/pStatus.asp",
+]
+
+# endpoint ที่อาจค้างค่าเก่า — อ่านหลัง trigger refresh เท่านั้น
+_TSC_CACHED_PATHS = [
+    "/title.asp",
+    "/setup.htm",
+    "/main.asp",
+    "/",
+    "/index.htm",
+]
+
+_TSC_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-cache, no-store, must-revalidate",
+    "Pragma":        "no-cache",
+}
+
 
 def _parse_tsc_status(html: str):
     """แยก (status, milage_mm) จาก HTML ของ TSC TA300 web interface"""
@@ -216,10 +236,69 @@ def _parse_tsc_status(html: str):
                 status = mapped
                 break
     milage_mm = None
-    m = re.search(r'milage\D+([\d.]+)\s*km', lower)
+    m = re.search(r'mile?age\D+([\d.]+)\s*km', lower)
     if m:
         milage_mm = int(float(m.group(1)) * 1_000_000)
     return status, milage_mm
+
+
+def _tsc_merge_status(current_status, current_milage, new_status, new_milage):
+    """รวมผล parse — ค่าใหม่ทับค่าเก่าเมื่อ parse ได้"""
+    if new_status is not None:
+        current_status = new_status
+    if new_milage is not None:
+        current_milage = new_milage
+    return current_status, current_milage
+
+
+def _tsc_trigger_refresh(session, ip: str, ts: int):
+    """
+    จำลองปุ่ม Refresh บนหน้า TSC TA300
+    (หน้า title.asp แสดงสถานะค้างจนกว่าจะ refresh)
+    """
+    refresh_attempts = [
+        ("POST", "/title.asp", {"Refresh": "Refresh"}),
+        ("POST", "/title.asp", {"refresh": "1"}),
+        ("GET",  f"/title.asp?Refresh=Refresh&_={ts}", None),
+        ("GET",  f"/cgi-bin/status.cgi?refresh=1&_={ts}", None),
+        ("GET",  f"/pStatus.asp?refresh=1&_={ts}", None),
+    ]
+    for method, path, data in refresh_attempts:
+        try:
+            url = f"http://{ip}{path}"
+            if method == "POST":
+                session.post(url, data=data, timeout=5)
+            else:
+                session.get(url, timeout=5)
+        except Exception:
+            pass
+
+
+def _tsc_fetch_paths(session, ip: str, paths: list, ts: int):
+    """GET หลาย path — คืน (status, milage_mm, http_up, frame_paths)"""
+    import re as _re
+    status = None
+    milage = None
+    http_up = False
+    frame_paths = []
+    for path in paths:
+        sep = "&" if "?" in path else "?"
+        url = f"http://{ip}{path}{sep}_={ts}"
+        try:
+            resp = session.get(url, timeout=5)
+            if resp.status_code != 200:
+                continue
+            http_up = True
+            for fsrc in _re.findall(
+                    r'<frame[^>]+src\s*=\s*[\'"]?(/[^\'" >]+)',
+                    resp.text, _re.IGNORECASE):
+                if fsrc not in frame_paths:
+                    frame_paths.append(fsrc)
+            s, m = _parse_tsc_status(resp.text)
+            status, milage = _tsc_merge_status(status, milage, s, m)
+        except Exception:
+            pass
+    return status, milage, http_up, frame_paths
 
 
 def get_printer_status(ip: str, community: str = "public") -> dict:
@@ -230,39 +309,30 @@ def get_printer_status(ip: str, community: str = "public") -> dict:
     """
     # ── HTTP (TSC TA300 EZ) ──────────────────────────────────────────────
     if REQUESTS_AVAILABLE:
-        import re as _re
-        _status  = None
-        _milage  = None
-        _http_up = False
-        queue    = ["/title.asp", "/cgi-bin/status.cgi",
-                    "/setup.htm", "/main.asp", "/pStatus.asp"]
-        visited  = set()
+        ts = int(time.time() * 1000)
+        session = requests.Session()
+        session.headers.update(_TSC_NO_CACHE_HEADERS)
 
-        while queue and len(visited) < 12:
-            path = queue.pop(0)
-            if path in visited:
-                continue
-            visited.add(path)
-            try:
-                resp = requests.get(f"http://{ip}{path}", timeout=5)
-                if resp.status_code != 200:
-                    continue
-                _http_up = True
-                # ตาม FRAME src ถ้าเป็น frameset
-                for fsrc in _re.findall(
-                        r'<frame[^>]+src\s*=\s*[\'"]?(/[^\'" >]+)',
-                        resp.text, _re.IGNORECASE):
-                    if fsrc not in visited:
-                        queue.insert(0, fsrc)
-                s, m = _parse_tsc_status(resp.text)
-                if s is not None and _status is None:
-                    _status = s
-                if m is not None and _milage is None:
-                    _milage = m
-                if _status is not None and _milage is not None:
-                    break
-            except Exception:
-                pass
+        # 1) กระตุ้นให้ print server อ่านสถานะล่าสุดจากเครื่องปริ้น
+        _tsc_trigger_refresh(session, ip, ts)
+
+        # 2) อ่าน endpoint สดก่อน
+        _status, _milage, _http_up, frames = _tsc_fetch_paths(
+            session, ip, _TSC_LIVE_PATHS, ts)
+
+        # 3) อ่าน title.asp / หน้าหลัก (หลัง refresh แล้ว)
+        s2, m2, up2, frames2 = _tsc_fetch_paths(
+            session, ip, _TSC_CACHED_PATHS, ts)
+        _status, _milage = _tsc_merge_status(_status, _milage, s2, m2)
+        _http_up = _http_up or up2
+
+        # 4) ตาม frame ที่พบ (เช่น frameset ของหน้า index)
+        extra = [p for p in (frames + frames2)
+                 if p not in _TSC_LIVE_PATHS + _TSC_CACHED_PATHS][:6]
+        if extra:
+            s3, m3, up3, _ = _tsc_fetch_paths(session, ip, extra, ts)
+            _status, _milage = _tsc_merge_status(_status, _milage, s3, m3)
+            _http_up = _http_up or up3
 
         if _http_up:
             return {"status": _status or STATUS_ONLINE, "page_count": None,

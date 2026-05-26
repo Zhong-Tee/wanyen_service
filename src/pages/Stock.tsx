@@ -5,7 +5,6 @@ import { useProducts } from '../hooks/useProducts'
 import { useSheetSync } from '../hooks/useSheetSync'
 import type { SyncUnmatched } from '../hooks/useSheetSync'
 import { showToast } from '../components/Toast'
-import { extractBranchNumForQueue, sendChangeUICommand } from '../lib/printerCommandQueue'
 import type { StoreGroup, BranchStock, StockStatus } from '../types'
 
 const STATUS_PRIORITY: Record<StockStatus, number> = { 'กำลังใช้': 0, 'เก็บ': 1, 'หมด': 2 }
@@ -46,7 +45,6 @@ export function Stock() {
   const [modalProductSearch, setModalProductSearch] = useState<string>('')
   const [zoomImage, setZoomImage] = useState<string | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
-  const [changingUiId, setChangingUiId] = useState<string | null>(null)
   const [showNotif, setShowNotif] = useState(false)
   const [notifFilter, setNotifFilter] = useState<SyncUnmatched['reason'] | 'all'>('all')
   const notifRef = useRef<HTMLDivElement>(null)
@@ -67,11 +65,6 @@ export function Stock() {
       .sort((a, b) => STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status]),
     [stock, productSearch]
   )
-
-  const selectedBranchNum = useMemo(() => {
-    const branch = branches.find((b) => b.id === selectedBranch)
-    return branch ? extractBranchNumForQueue(branch.name) : null
-  }, [branches, selectedBranch])
 
   useEffect(() => { setSelectedBranch(''); setBranchSearch('') }, [selectedGroup])
   useEffect(() => { if (selectedBranch) fetchByBranch(selectedBranch) }, [selectedBranch, fetchByBranch])
@@ -136,28 +129,6 @@ export function Stock() {
   const handleManualSync = async () => {
     await sync()
     if (selectedBranch) fetchByBranch(selectedBranch)
-  }
-
-  const handleChangeUI = async (item: BranchStock) => {
-    const productName = item.product?.name?.trim()
-    if (!productName) {
-      showToast('ไม่พบชื่อสินค้า', 'error')
-      return
-    }
-    if (!selectedBranchNum) {
-      showToast('ไม่พบเลขสาขา — ชื่อสาขาต้องขึ้นต้นด้วยตัวเลข', 'error')
-      return
-    }
-    setChangingUiId(item.id)
-    showToast(`กำลังเปลี่ยน UI "${productName}" ที่สาขา ${selectedBranchNum}...`, 'info')
-    try {
-      const result = await sendChangeUICommand(selectedBranchNum, productName)
-      showToast(result.message, result.ok ? 'success' : 'error')
-    } catch (e: unknown) {
-      showToast(e instanceof Error ? e.message : 'ส่งคำสั่งไม่สำเร็จ', 'error')
-    } finally {
-      setChangingUiId(null)
-    }
   }
 
   return (
@@ -420,11 +391,8 @@ export function Stock() {
                   item={item}
                   updatingId={updatingId}
                   confirmDeleteId={confirmDeleteId}
-                  changingUiId={changingUiId}
-                  branchNum={selectedBranchNum}
                   quantityInputs={quantityInputs}
                   onSetStatus={handleSetStatus}
-                  onChangeUI={handleChangeUI}
                   onQuantityChange={(id, val) => setQuantityInputs((prev) => ({ ...prev, [id]: val }))}
                   onZoomImage={setZoomImage}
                   onCancelDelete={() => setConfirmDeleteId(null)}
@@ -527,11 +495,8 @@ interface StockCardProps {
   item: BranchStock
   updatingId: string | null
   confirmDeleteId: string | null
-  changingUiId: string | null
-  branchNum: string | null
   quantityInputs: Record<string, string>
   onSetStatus: (item: BranchStock, status: StockStatus, qty?: number) => void
-  onChangeUI: (item: BranchStock) => void
   onQuantityChange: (id: string, val: string) => void
   onZoomImage: (url: string) => void
   onCancelDelete: () => void
@@ -541,18 +506,14 @@ function StockCard({
   item,
   updatingId,
   confirmDeleteId,
-  changingUiId,
-  branchNum,
   quantityInputs,
   onSetStatus,
-  onChangeUI,
   onQuantityChange,
   onZoomImage,
   onCancelDelete,
 }: StockCardProps) {
   const [showQtyInput, setShowQtyInput] = useState(false)
   const isUpdating = updatingId === item.id
-  const isChangingUi = changingUiId === item.id
   const awaitingConfirm = confirmDeleteId === item.id
 
   const getStatusColor = (s: StockStatus) => {
@@ -650,28 +611,10 @@ function StockCard({
                   disabled:opacity-50`}>
                 {isUpdating ? '...' : '📦 เก็บ'}
               </button>
-              <button onClick={() => onSetStatus(item, 'หมด')} disabled={isUpdating || isChangingUi}
+              <button onClick={() => onSetStatus(item, 'หมด')} disabled={isUpdating}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-50 text-red-500 hover:bg-red-100 border border-red-200 transition-all active:scale-95 disabled:opacity-50">
                 🚫 หมด
               </button>
-              {item.status === 'กำลังใช้' && (
-                <button
-                  type="button"
-                  onClick={() => onChangeUI(item)}
-                  disabled={isUpdating || isChangingUi || !branchNum}
-                  title={branchNum ? `ส่งคำสั่งไปสาขา ${branchNum}` : 'ไม่พบเลขสาขา'}
-                  className="ml-auto px-3 py-1.5 rounded-lg text-xs font-semibold bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 transition-all active:scale-95 disabled:opacity-50 flex items-center gap-1"
-                >
-                  {isChangingUi ? (
-                    <>
-                      <span className="inline-block w-3 h-3 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
-                      กำลังเปลี่ยน...
-                    </>
-                  ) : (
-                    <>🎨 เปลี่ยน UI</>
-                  )}
-                </button>
-              )}
             </div>
           )}
         </div>

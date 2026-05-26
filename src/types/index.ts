@@ -124,3 +124,24 @@ export interface DeliveryItem {
   quantity: number
   product?: Product
 }
+
+// ── Kiosk UI ─────────────────────────────────────────────────────────────────
+
+export interface KioskUiOption {
+  id: string
+  name: string
+  store_group_id: string
+  sort_order: number
+  is_active: boolean
+  created_at: string
+  store_group?: StoreGroup
+}
+
+export interface UiChangeLog {
+  id: string
+  branch_id: string
+  branch_name: string
+  store_group_id: string
+  ui_name: string
+  created_at: string
+}

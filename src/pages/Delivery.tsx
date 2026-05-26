@@ -4,7 +4,8 @@ import { useBranches } from '../hooks/useBranches'
 import { useProducts } from '../hooks/useProducts'
 import { showToast } from '../components/Toast'
 import { BarcodeScanner } from '../components/BarcodeScanner'
-import type { Delivery, DeliveryStatus } from '../types'
+import { countDeliveriesByStatus, deliveryTabBadge } from '../lib/deliveryCounts'
+import type { Delivery, DeliveryStatus, Product } from '../types'
 
 const STATUS_ORDER: DeliveryStatus[] = ['ต้องจัดส่ง', 'จัดส่งแล้ว', 'ได้รับแล้ว']
 
@@ -25,12 +26,36 @@ interface DeliveryItemForm {
   quantity: number | string
 }
 
+function filterProducts(products: Product[], search: string, includeIds: string[]) {
+  const q = search.trim().toLowerCase()
+  const keep = new Set(includeIds.filter(Boolean))
+  return products.filter((p) => q === '' || p.name.toLowerCase().includes(q) || keep.has(p.id))
+}
+
+function BarcodeIcon({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+      <path d="M2 6h1v12H2V6zm3 0h1v12H5V6zm2 0h2v12H7V6zm3 0h1v12h-1V6zm2 0h3v12h-3V6zm4 0h1v12h-1V6zm2 0h2v12h-2V6zm3 0h1v12h-1V6z" />
+    </svg>
+  )
+}
+
+function TabCountBadge({ count, active }: { count: number; active: boolean }) {
+  if (count <= 0) return null
+  return (
+    <span className={`min-w-[18px] h-[18px] text-[10px] font-bold rounded-full flex items-center justify-center px-1 leading-none
+      ${active ? 'bg-white text-pink-600' : 'bg-pink-600 text-white'}`}>
+      {count > 99 ? '99+' : count}
+    </span>
+  )
+}
+
 interface DeliveryPageProps {
   onAction?: () => void
 }
 
 export function DeliveryPage({ onAction }: DeliveryPageProps) {
-  const { deliveries, loading, createDelivery, updateStatus, updateTracking } = useDeliveries()
+  const { deliveries, loading, createDelivery, updateStatus, updateTracking, updateDeliveryItems } = useDeliveries()
   const { activeBranches: branches } = useBranches()
   const { products } = useProducts()
 
@@ -50,6 +75,11 @@ export function DeliveryPage({ onAction }: DeliveryPageProps) {
   const [editTrackingId, setEditTrackingId] = useState<string | null>(null)
   const [trackingDraft, setTrackingDraft] = useState('')
   const trackingInputRef = useRef<HTMLInputElement>(null!)
+
+  const [editItemsId, setEditItemsId] = useState<string | null>(null)
+  const [editItemsDraft, setEditItemsDraft] = useState<DeliveryItemForm[]>([])
+  const [editProductSearch, setEditProductSearch] = useState('')
+  const [savingItemsId, setSavingItemsId] = useState<string | null>(null)
 
   // Barcode scanner for create form
   const [showScanner, setShowScanner] = useState(false)
@@ -103,6 +133,38 @@ export function DeliveryPage({ onAction }: DeliveryPageProps) {
     setTrackingDraft(delivery.tracking_number ?? '')
     setTimeout(() => trackingInputRef.current?.focus(), 50)
   }
+
+  const openItemsEdit = (delivery: Delivery) => {
+    setEditItemsId(delivery.id)
+    setEditProductSearch('')
+    setEditItemsDraft(
+      delivery.items?.length
+        ? delivery.items.map((i) => ({ product_id: i.product_id, quantity: i.quantity }))
+        : [{ product_id: '', quantity: 320 }],
+    )
+  }
+
+  const updateEditItem = (idx: number, field: keyof DeliveryItemForm, value: string | number) => {
+    setEditItemsDraft((prev) => prev.map((item, i) => i === idx ? { ...item, [field]: value } : item))
+  }
+
+  const handleSaveItems = async (deliveryId: string) => {
+    const parsedItems = editItemsDraft.map((i) => ({ ...i, quantity: Number(i.quantity) || 0 }))
+    const validItems = parsedItems.filter((i) => i.product_id && i.quantity > 0)
+    if (validItems.length === 0) { showToast('กรุณาเพิ่มสินค้าอย่างน้อย 1 รายการ', 'warning'); return }
+    setSavingItemsId(deliveryId)
+    const { error } = await updateDeliveryItems(deliveryId, validItems)
+    setSavingItemsId(null)
+    if (error) showToast(`บันทึกไม่ได้: ${error}`, 'error')
+    else { showToast('บันทึกรายการสินค้าแล้ว', 'success'); setEditItemsId(null) }
+  }
+
+  const selectedProductIds = useMemo(
+    () => items.map((i) => i.product_id).filter(Boolean),
+    [items],
+  )
+
+  const statusCounts = useMemo(() => countDeliveriesByStatus(deliveries), [deliveries])
 
   const filtered = useMemo(() => {
     let list = filterStatus === 'all' ? deliveries : deliveries.filter((d) => d.status === filterStatus)
@@ -162,7 +224,7 @@ export function DeliveryPage({ onAction }: DeliveryPageProps) {
               </select>
             </div>
 
-            {/* Tracking with camera scan */}
+            {/* Tracking with barcode scan */}
             <div>
               <label className="text-xs font-medium text-gray-500 mb-1.5 block">เลขพัสดุ</label>
               <div className="flex gap-2">
@@ -173,8 +235,8 @@ export function DeliveryPage({ onAction }: DeliveryPageProps) {
                   className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400"
                 />
                 <button type="button" onClick={() => setShowScanner(true)}
-                  className="w-11 h-11 flex items-center justify-center rounded-xl bg-pink-100 text-pink-700 hover:bg-pink-200 transition-colors flex-shrink-0 text-xl">
-                  📷
+                  className="w-11 h-11 flex items-center justify-center rounded-xl bg-pink-100 text-pink-700 hover:bg-pink-200 transition-colors flex-shrink-0">
+                  <BarcodeIcon className="w-6 h-6" />
                 </button>
               </div>
             </div>
@@ -196,8 +258,7 @@ export function DeliveryPage({ onAction }: DeliveryPageProps) {
                   <select value={item.product_id} onChange={(e) => updateItem(idx, 'product_id', e.target.value)}
                     className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400 bg-white">
                     <option value="">— เลือกสินค้า —</option>
-                    {products
-                      .filter((p) => formProductSearch.trim() === '' || p.name.toLowerCase().includes(formProductSearch.toLowerCase()))
+                    {filterProducts(products, formProductSearch, selectedProductIds)
                       .map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                   <input type="number" min="0" value={item.quantity}
@@ -253,13 +314,18 @@ export function DeliveryPage({ onAction }: DeliveryPageProps) {
       {/* Filter bar */}
       <div className="space-y-2">
         <div className="flex gap-2 overflow-x-auto pb-1">
-          {(['all', ...STATUS_ORDER] as const).map((s) => (
-            <button key={s} onClick={() => setFilterStatus(s)}
-              className={`flex-shrink-0 px-4 py-2 rounded-xl text-xs font-semibold transition-all
-                ${filterStatus === s ? 'bg-pink-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
-              {s === 'all' ? 'ทั้งหมด' : s}
-            </button>
-          ))}
+          {(['all', ...STATUS_ORDER] as const).map((s) => {
+            const active = filterStatus === s
+            const badge = s === 'all' ? 0 : deliveryTabBadge(s, statusCounts)
+            return (
+              <button key={s} onClick={() => setFilterStatus(s)}
+                className={`flex-shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold transition-all
+                  ${active ? 'bg-pink-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'}`}>
+                <span>{s === 'all' ? 'ทั้งหมด' : s}</span>
+                <TabCountBadge count={badge} active={active} />
+              </button>
+            )
+          })}
         </div>
         <div className="relative">
           <input
@@ -287,16 +353,27 @@ export function DeliveryPage({ onAction }: DeliveryPageProps) {
             <DeliveryCard
               key={d.id}
               delivery={d}
+              products={products}
               updatingId={updatingId}
               editTrackingId={editTrackingId}
               trackingDraft={trackingDraft}
               trackingInputRef={trackingInputRef}
+              editItemsId={editItemsId}
+              editItemsDraft={editItemsDraft}
+              editProductSearch={editProductSearch}
+              savingItemsId={savingItemsId}
               onNextStatus={handleNextStatus}
               onOpenTracking={openTrackingEdit}
               onSaveTracking={handleSaveTracking}
               onTrackingChange={setTrackingDraft}
               onCancelTracking={() => setEditTrackingId(null)}
               onScanTracking={(id) => { setShowTrackingScanner(id); setEditTrackingId(id) }}
+              onOpenItemsEdit={openItemsEdit}
+              onSaveItems={handleSaveItems}
+              onCancelItemsEdit={() => setEditItemsId(null)}
+              onEditItemsChange={setEditItemsDraft}
+              onEditProductSearchChange={setEditProductSearch}
+              onUpdateEditItem={updateEditItem}
               statusStyles={STATUS_STYLES}
               nextStatus={STATUS_NEXT}
             />
@@ -309,16 +386,27 @@ export function DeliveryPage({ onAction }: DeliveryPageProps) {
 
 interface DeliveryCardProps {
   delivery: Delivery
+  products: Product[]
   updatingId: string | null
   editTrackingId: string | null
   trackingDraft: string
   trackingInputRef: React.RefObject<HTMLInputElement>
+  editItemsId: string | null
+  editItemsDraft: DeliveryItemForm[]
+  editProductSearch: string
+  savingItemsId: string | null
   onNextStatus: (d: Delivery) => void
   onOpenTracking: (d: Delivery) => void
   onSaveTracking: (id: string) => void
   onTrackingChange: (v: string) => void
   onCancelTracking: () => void
   onScanTracking: (id: string) => void
+  onOpenItemsEdit: (d: Delivery) => void
+  onSaveItems: (id: string) => void
+  onCancelItemsEdit: () => void
+  onEditItemsChange: (items: DeliveryItemForm[]) => void
+  onEditProductSearchChange: (v: string) => void
+  onUpdateEditItem: (idx: number, field: keyof DeliveryItemForm, value: string | number) => void
   statusStyles: Record<DeliveryStatus, string>
   nextStatus: Record<DeliveryStatus, DeliveryStatus | null>
 }
@@ -328,13 +416,19 @@ function formatDate(iso: string) {
 }
 
 function DeliveryCard({
-  delivery: d, updatingId, editTrackingId, trackingDraft, trackingInputRef,
+  delivery: d, products, updatingId, editTrackingId, trackingDraft, trackingInputRef,
+  editItemsId, editItemsDraft, editProductSearch, savingItemsId,
   onNextStatus, onOpenTracking, onSaveTracking, onTrackingChange, onCancelTracking, onScanTracking,
+  onOpenItemsEdit, onSaveItems, onCancelItemsEdit, onEditItemsChange, onEditProductSearchChange, onUpdateEditItem,
   statusStyles, nextStatus,
 }: DeliveryCardProps) {
   const next = nextStatus[d.status]
   const isUpdating = updatingId === d.id
   const isEditingTracking = editTrackingId === d.id
+  const isEditingItems = editItemsId === d.id
+  const isSavingItems = savingItemsId === d.id
+  const canEditItems = d.status !== 'ได้รับแล้ว'
+  const editSelectedProductIds = editItemsDraft.map((i) => i.product_id).filter(Boolean)
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 space-y-3">
@@ -373,8 +467,62 @@ function DeliveryCard({
         </div>
       </div>
 
-      {d.items && d.items.length > 0 && (
+      {isEditingItems ? (
+        <div className="space-y-2 bg-gray-50 rounded-xl p-3 border border-gray-100">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-gray-600">แก้ไขรายการสินค้า</span>
+          </div>
+          <div className="relative">
+            <input
+              type="text" value={editProductSearch} onChange={(e) => onEditProductSearchChange(e.target.value)}
+              placeholder="ค้นหาชื่อสินค้า..."
+              className="w-full border border-gray-200 rounded-xl px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400 bg-white"
+            />
+            {editProductSearch && (
+              <button onClick={() => onEditProductSearchChange('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 w-5 h-5 flex items-center justify-center rounded-full hover:bg-gray-100 text-xs">✕</button>
+            )}
+          </div>
+          {editItemsDraft.map((item, idx) => (
+            <div key={idx} className="flex gap-2 items-center">
+              <select value={item.product_id} onChange={(e) => onUpdateEditItem(idx, 'product_id', e.target.value)}
+                className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400 bg-white">
+                <option value="">— เลือกสินค้า —</option>
+                {filterProducts(products, editProductSearch, editSelectedProductIds)
+                  .map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <input type="number" min="0" value={item.quantity}
+                onChange={(e) => onUpdateEditItem(idx, 'quantity', e.target.value === '' ? '' : parseInt(e.target.value))}
+                className="w-20 border border-gray-200 rounded-xl px-3 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-pink-400 bg-white" />
+              <span className="text-xs text-gray-500 flex-shrink-0">แผ่น</span>
+              {editItemsDraft.length > 1 && (
+                <button type="button" onClick={() => onEditItemsChange(editItemsDraft.filter((_, i) => i !== idx))}
+                  className="w-8 h-8 flex items-center justify-center rounded-lg bg-red-50 text-red-400 hover:bg-red-100 flex-shrink-0 text-sm">✕</button>
+              )}
+            </div>
+          ))}
+          <button type="button" onClick={() => onEditItemsChange([...editItemsDraft, { product_id: '', quantity: 320 }])}
+            className="w-full py-2 rounded-xl border-2 border-dashed border-gray-200 text-gray-400 text-sm hover:border-pink-300 hover:text-pink-500 bg-white">
+            + เพิ่มสินค้า
+          </button>
+          <div className="flex gap-2 pt-1">
+            <button onClick={() => onSaveItems(d.id)} disabled={isSavingItems}
+              className="flex-1 py-2 bg-pink-600 text-white rounded-xl text-xs font-bold hover:bg-pink-700 disabled:opacity-50">
+              {isSavingItems ? 'กำลังบันทึก...' : 'บันทึก'}
+            </button>
+            <button onClick={onCancelItemsEdit}
+              className="px-4 py-2 text-gray-400 text-xs border border-gray-200 rounded-xl hover:bg-gray-50 bg-white">ยกเลิก</button>
+          </div>
+        </div>
+      ) : d.items && d.items.length > 0 ? (
         <div className="space-y-1">
+          {canEditItems && (
+            <div className="flex justify-end">
+              <button onClick={() => onOpenItemsEdit(d)}
+                className="text-xs text-pink-600 hover:text-pink-700 font-medium">
+                ✏️ แก้ไขรายการ
+              </button>
+            </div>
+          )}
           {d.items.map((item) => (
             <div key={item.id} className="flex items-center gap-2 text-sm">
               {item.product?.image_url && (
@@ -385,7 +533,12 @@ function DeliveryCard({
             </div>
           ))}
         </div>
-      )}
+      ) : canEditItems ? (
+        <button onClick={() => onOpenItemsEdit(d)}
+          className="text-xs text-gray-400 hover:text-pink-600 border border-dashed border-gray-200 rounded-xl py-2 w-full">
+          + เพิ่มรายการสินค้า
+        </button>
+      ) : null}
 
       {/* Tracking number */}
       <div>
@@ -400,8 +553,8 @@ function DeliveryCard({
                 className="flex-1 border border-pink-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400"
               />
               <button onClick={() => onScanTracking(d.id)}
-                className="w-10 h-10 flex items-center justify-center rounded-xl bg-pink-100 text-pink-700 hover:bg-pink-200 text-xl flex-shrink-0">
-                📷
+                className="w-10 h-10 flex items-center justify-center rounded-xl bg-pink-100 text-pink-700 hover:bg-pink-200 flex-shrink-0">
+                <BarcodeIcon className="w-5 h-5" />
               </button>
             </div>
             <div className="flex gap-2">

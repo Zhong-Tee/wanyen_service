@@ -11,6 +11,7 @@ import { JobPage } from './pages/Job'
 import { Catalog } from './pages/Catalog'
 import { DeliveryPage } from './pages/Delivery'
 import { Printer } from './pages/Printer'
+import { ChangeUI } from './pages/ChangeUI'
 
 export default function App() {
   const [activePage, setActivePage] = useState<Page>('issue')
@@ -33,6 +34,7 @@ export default function App() {
         {activePage === 'job'      && <JobPage onAction={refreshBadges} />}
         {activePage === 'delivery' && <DeliveryPage onAction={refreshBadges} />}
         {activePage === 'report'   && <Report serviceAlertCount={counts.service} />}
+        {activePage === 'changeui' && <ChangeUI />}
         {activePage === 'settings' && <Settings />}
       </Layout>
       <ToastContainer toasts={toasts} onRemove={removeToast} />

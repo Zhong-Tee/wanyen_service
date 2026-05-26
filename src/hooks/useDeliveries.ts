@@ -86,11 +86,28 @@ export function useDeliveries() {
     return { error: error?.message ?? null }
   }
 
+  const updateDeliveryItems = async (
+    deliveryId: string,
+    items: { product_id: string; quantity: number }[],
+  ) => {
+    const { error: delErr } = await supabase.from('delivery_items').delete().eq('delivery_id', deliveryId)
+    if (delErr) return { error: delErr.message }
+
+    if (items.length > 0) {
+      const itemRows = items.map((i) => ({ delivery_id: deliveryId, product_id: i.product_id, quantity: i.quantity }))
+      const { error: insErr } = await supabase.from('delivery_items').insert(itemRows)
+      if (insErr) return { error: insErr.message }
+    }
+
+    fetchAll()
+    return { error: null }
+  }
+
   const deleteDelivery = async (id: string) => {
     const { error } = await supabase.from('deliveries').delete().eq('id', id)
     if (!error) fetchAll()
     return { error: error?.message ?? null }
   }
 
-  return { deliveries, loading, refresh: fetchAll, createDelivery, updateStatus, updateTracking, deleteDelivery }
+  return { deliveries, loading, refresh: fetchAll, createDelivery, updateStatus, updateTracking, updateDeliveryItems, deleteDelivery }
 }
