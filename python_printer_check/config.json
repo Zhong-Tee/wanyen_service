@@ -33,7 +33,7 @@
     {
       "id": "printer_01",
       "name": "ปริ้นเตอร์ 1",
-      "ip": "192.168.1.111",
+      "ip": "192.168.31.111",
       "snmp_community": "public",
       "product_name": "ชื่อสินค้าให้ตรงกับในระบบ",
       "bartender_template": "C:/ST/app_cust_V.6/FormatSA.btw",
@@ -48,7 +48,7 @@
     {
       "id": "printer_02",
       "name": "ปริ้นเตอร์ 2",
-      "ip": "192.168.1.112",
+      "ip": "192.168.31.112",
       "snmp_community": "public",
       "product_name": "ชื่อสินค้าให้ตรงกับในระบบ",
       "bartender_template": "C:/ST/app_cust_V.6/FormatMH2.btw",
@@ -69,7 +69,7 @@
     "notify_startup": false
   },
 
-  "check_interval": 60,
+  "check_interval": 30,
   "log_interval": 300,
 
   "kiosk": {

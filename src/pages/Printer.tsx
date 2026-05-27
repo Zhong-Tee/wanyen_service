@@ -20,11 +20,33 @@ interface PrinterRecord {
   printer_name: string
   printer_ip: string
   status: PrinterStatusKey
+  status_label: string | null
   page_count: number | null
   alert_msg: string | null
   event: string | null
   stock_remaining: number | null
   timestamp: string
+}
+
+/** ชื่อสถานะภาษาอังกฤษ default ตามประเภท (เมื่อยังไม่มี log ใหม่) */
+const ENGLISH_STATUS_LABELS: Record<PrinterStatusKey, string> = {
+  online: 'Ready',
+  printing: 'Printing',
+  offline: 'Offline',
+  paper_out: 'Paper Out',
+  ribbon_out: 'Ribbon Out',
+  error: 'Error',
+}
+
+/** ชื่อสถานะที่แสดง — จากปริ้นเตอร์จริง (Ready, Carriage Open) */
+function getPrinterDisplayLabel(p: PrinterRecord): string {
+  const fromLabel = p.status_label?.trim()
+  if (fromLabel) return fromLabel
+
+  const fromAlert = p.alert_msg?.trim()
+  if (fromAlert && fromAlert.length <= 100) return fromAlert
+
+  return ENGLISH_STATUS_LABELS[p.status] ?? p.status
 }
 
 // ── Status Config ─────────────────────────────────────────────────────────────
@@ -332,17 +354,28 @@ function usePrinterStatus() {
     setLoading(true)
     setError(null)
     try {
-      const [printerResult, onlineMap] = await Promise.all([
-        supabase
-          .from('printer_log')
-          .select(
-            'id, branch_id, branch_name, printer_id, printer_name, printer_ip, status, page_count, alert_msg, event, stock_remaining, timestamp'
-          )
-          .order('timestamp', { ascending: false })
-          .limit(2000),
-        fetchBranchOnlineMap().catch(() => new Map<string, 'online' | 'offline'>()),
-      ])
+      const colsWithLabel =
+        'id, branch_id, branch_name, printer_id, printer_name, printer_ip, status, status_label, page_count, alert_msg, event, stock_remaining, timestamp'
+      const colsLegacy =
+        'id, branch_id, branch_name, printer_id, printer_name, printer_ip, status, page_count, alert_msg, event, stock_remaining, timestamp'
 
+      const fetchLogs = () =>
+        supabase.from('printer_log').select(colsWithLabel).order('timestamp', { ascending: false }).limit(2000)
+
+      const onlineMapPromise = fetchBranchOnlineMap().catch(
+        () => new Map<string, 'online' | 'offline'>()
+      )
+
+      let printerResult = await fetchLogs()
+      if (printerResult.error?.message?.includes('status_label')) {
+        printerResult = await supabase
+          .from('printer_log')
+          .select(colsLegacy)
+          .order('timestamp', { ascending: false })
+          .limit(2000)
+      }
+
+      const onlineMap = await onlineMapPromise
       const { data: rows, error: err } = printerResult
       if (err) throw err
 
@@ -679,7 +712,7 @@ export function Printer() {
                             <span
                               className={`text-xs px-2 py-0.5 rounded-full font-medium ${cfg.color}`}
                             >
-                              {cfg.icon} {cfg.label}
+                              {cfg.icon} {getPrinterDisplayLabel(p)}
                             </span>
                           </div>
                           <div className="flex items-center gap-3 mt-0.5 flex-wrap">
@@ -696,7 +729,9 @@ export function Printer() {
                                 {p.stock_remaining <= DEFAULT_LOW_STOCK_THRESHOLD && ' ⚠️'}
                               </span>
                             )}
-                            {p.alert_msg && (
+                            {p.alert_msg &&
+                              p.alert_msg.trim() !== getPrinterDisplayLabel(p) &&
+                              (p.status_label?.trim() || p.alert_msg.length > 100) && (
                               <span
                                 className="text-xs text-red-500 truncate max-w-[180px]"
                                 title={p.alert_msg}

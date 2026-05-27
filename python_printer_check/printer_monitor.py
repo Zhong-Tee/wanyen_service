@@ -198,6 +198,8 @@ _HTTP_STATUS_KEYWORDS = [
     ("ribbon end",    STATUS_RIBBON_OUT),
     ("no ribbon",     STATUS_RIBBON_OUT),
     ("head open",     STATUS_ERROR),
+    ("carriage open", STATUS_ERROR),
+    ("cover open",    STATUS_ERROR),
     ("pause",         STATUS_ERROR),
     ("error",         STATUS_ERROR),
 ]
@@ -223,32 +225,111 @@ _TSC_NO_CACHE_HEADERS = {
 }
 
 
+def _default_status_label(status: str) -> str:
+    """ชื่อสถานะ default เมื่ออ่านจาก SNMP หรือ parse ไม่ได้ข้อความ"""
+    return {
+        STATUS_ONLINE:     "Ready",
+        STATUS_PRINTING:   "Printing",
+        STATUS_OFFLINE:    "Offline",
+        STATUS_PAPER_OUT:  "Paper Out",
+        STATUS_RIBBON_OUT: "Ribbon Out",
+        STATUS_ERROR:      "Error",
+    }.get(status, status or "Unknown")
+
+
+def _extract_printer_status_text(html: str):
+    """ดึงข้อความสถานะจาก cell Printer Status (คงตัวพิมพ์ใหญ่-เล็กตามเครื่อง)"""
+    import re
+    lower = html.lower()
+    idx = lower.find("printer status")
+    if idx < 0:
+        return None
+    snippet = html[idx: idx + 400]
+    m = re.search(
+        r"printer status.*?(?:redtext|greentext)[^>]*>\s*([^<]+)",
+        snippet,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if m:
+        return m.group(1).strip()
+    return None
+
+
+def _map_label_to_status(label: str):
+    """แปลงข้อความจากปริ้นเตอร์ → status key"""
+    if not label:
+        return None
+    lower = label.lower()
+    for keyword, mapped in _HTTP_STATUS_KEYWORDS:
+        if keyword in lower:
+            return mapped
+    if lower in ("ready",):
+        return STATUS_ONLINE
+    if lower in ("printing",):
+        return STATUS_PRINTING
+    return STATUS_ERROR
+
+
 def _parse_tsc_status(html: str):
-    """แยก (status, milage_mm) จาก HTML ของ TSC TA300 web interface"""
+    """แยก (status, milage_mm, status_label) จาก HTML ของ TSC TA300 web interface"""
     import re
     lower = html.lower()
     status = None
-    idx = lower.find("printer status")
-    if idx >= 0:
-        snippet = lower[idx: idx + 400]
+    status_label = _extract_printer_status_text(html)
+    if status_label:
+        status = _map_label_to_status(status_label)
+    elif lower.find("printer status") >= 0:
+        snippet = lower[lower.find("printer status"): lower.find("printer status") + 400]
         for keyword, mapped in _HTTP_STATUS_KEYWORDS:
             if keyword in snippet:
                 status = mapped
+                status_label = keyword.title()
                 break
     milage_mm = None
     m = re.search(r'mile?age\D+([\d.]+)\s*km', lower)
     if m:
         milage_mm = int(float(m.group(1)) * 1_000_000)
-    return status, milage_mm
+    return status, milage_mm, status_label
 
 
-def _tsc_merge_status(current_status, current_milage, new_status, new_milage):
-    """รวมผล parse — ค่าใหม่ทับค่าเก่าเมื่อ parse ได้"""
+# ค่าน้อย = รุนแรงกว่า — ใช้ตอน merge หลายหน้า HTML (กัน title.asp ค้าง Ready ทับ status.cgi)
+_STATUS_SEVERITY = {
+    STATUS_OFFLINE:    0,
+    STATUS_PAPER_OUT:  1,
+    STATUS_RIBBON_OUT: 1,
+    STATUS_ERROR:      2,
+    STATUS_PRINTING:   8,
+    STATUS_ONLINE:     9,
+}
+
+
+def _tsc_pick_status(current_status, new_status):
+    """เลือกสถานะที่รุนแรงกว่า (ไม่ให้หน้า cache ทับสถานะสด)"""
+    if new_status is None:
+        return current_status
+    if current_status is None:
+        return new_status
+    cur = _STATUS_SEVERITY.get(current_status, 5)
+    new = _STATUS_SEVERITY.get(new_status, 5)
+    return new_status if new < cur else current_status
+
+
+def _tsc_merge_status(current_status, current_milage, current_label,
+                      new_status, new_milage, new_label):
+    """รวมผล parse — สถานะรุนแรงกว่ามี priority, ใช้ label ของสถานะที่ชนะ"""
     if new_status is not None:
-        current_status = new_status
+        picked = _tsc_pick_status(current_status, new_status)
+        if picked == new_status:
+            current_status = new_status
+            if new_label:
+                current_label = new_label
+        elif current_status is None:
+            current_status = new_status
+            if new_label:
+                current_label = new_label
     if new_milage is not None:
         current_milage = new_milage
-    return current_status, current_milage
+    return current_status, current_milage, current_label
 
 
 def _tsc_trigger_refresh(session, ip: str, ts: int):
@@ -274,18 +355,20 @@ def _tsc_trigger_refresh(session, ip: str, ts: int):
             pass
 
 
-def _tsc_fetch_paths(session, ip: str, paths: list, ts: int):
-    """GET หลาย path — คืน (status, milage_mm, http_up, frame_paths)"""
+def _tsc_fetch_paths(session, ip: str, paths: list, ts: int,
+                     merge_status: bool = True):
+    """GET หลาย path — คืน (status, milage_mm, status_label, http_up, frame_paths)"""
     import re as _re
     status = None
     milage = None
+    status_label = None
     http_up = False
     frame_paths = []
     for path in paths:
         sep = "&" if "?" in path else "?"
         url = f"http://{ip}{path}{sep}_={ts}"
         try:
-            resp = session.get(url, timeout=5)
+            resp = session.get(url, timeout=2)
             if resp.status_code != 200:
                 continue
             http_up = True
@@ -294,18 +377,31 @@ def _tsc_fetch_paths(session, ip: str, paths: list, ts: int):
                     resp.text, _re.IGNORECASE):
                 if fsrc not in frame_paths:
                     frame_paths.append(fsrc)
-            s, m = _parse_tsc_status(resp.text)
-            status, milage = _tsc_merge_status(status, milage, s, m)
-        except Exception:
-            pass
-    return status, milage, http_up, frame_paths
+            s, m, lbl = _parse_tsc_status(resp.text)
+            if merge_status:
+                status, milage, status_label = _tsc_merge_status(
+                    status, milage, status_label, s, m, lbl)
+            elif m is not None:
+                milage = m
+        except Exception as e:
+            # TSC status.cgi บางรุ่นส่ง HTML โดยไม่มี HTTP header — requests โยน BadStatusLine
+            err_text = str(e)
+            if "printer status" in err_text.lower():
+                http_up = True
+                s, m, lbl = _parse_tsc_status(err_text)
+                if merge_status:
+                    status, milage, status_label = _tsc_merge_status(
+                        status, milage, status_label, s, m, lbl)
+                elif m is not None:
+                    milage = m
+    return status, milage, status_label, http_up, frame_paths
 
 
 def get_printer_status(ip: str, community: str = "public") -> dict:
     """
     ตรวจสอบสถานะปริ้นเตอร์
     ลำดับ: HTTP web interface (TSC TA300) → SNMP fallback
-    คืน dict: { status, page_count, alert_msg, raw_status_code, milage_mm }
+    คืน dict: { status, status_label, page_count, alert_msg, raw_status_code, milage_mm }
     """
     # ── HTTP (TSC TA300 EZ) ──────────────────────────────────────────────
     if REQUESTS_AVAILABLE:
@@ -317,33 +413,39 @@ def get_printer_status(ip: str, community: str = "public") -> dict:
         _tsc_trigger_refresh(session, ip, ts)
 
         # 2) อ่าน endpoint สดก่อน
-        _status, _milage, _http_up, frames = _tsc_fetch_paths(
+        _status, _milage, _label, _http_up, frames = _tsc_fetch_paths(
             session, ip, _TSC_LIVE_PATHS, ts)
 
-        # 3) อ่าน title.asp / หน้าหลัก (หลัง refresh แล้ว)
-        s2, m2, up2, frames2 = _tsc_fetch_paths(
-            session, ip, _TSC_CACHED_PATHS, ts)
-        _status, _milage = _tsc_merge_status(_status, _milage, s2, m2)
+        # 3) อ่าน title.asp / หน้าหลัก — เอาแค่ milage/frames ถ้ามีสถานะสดแล้ว
+        s2, m2, lbl2, up2, frames2 = _tsc_fetch_paths(
+            session, ip, _TSC_CACHED_PATHS, ts,
+            merge_status=_status is None)
+        _status, _milage, _label = _tsc_merge_status(
+            _status, _milage, _label, s2, m2, lbl2)
         _http_up = _http_up or up2
 
         # 4) ตาม frame ที่พบ (เช่น frameset ของหน้า index)
         extra = [p for p in (frames + frames2)
                  if p not in _TSC_LIVE_PATHS + _TSC_CACHED_PATHS][:6]
         if extra:
-            s3, m3, up3, _ = _tsc_fetch_paths(session, ip, extra, ts)
-            _status, _milage = _tsc_merge_status(_status, _milage, s3, m3)
+            s3, m3, lbl3, up3, _ = _tsc_fetch_paths(session, ip, extra, ts)
+            _status, _milage, _label = _tsc_merge_status(
+                _status, _milage, _label, s3, m3, lbl3)
             _http_up = _http_up or up3
 
         if _http_up:
-            return {"status": _status or STATUS_ONLINE, "page_count": None,
-                    "alert_msg": "", "raw_status_code": None,
-                    "milage_mm": _milage}
+            final_status = _status or STATUS_ONLINE
+            final_label  = _label or _default_status_label(final_status)
+            return {"status": final_status, "status_label": final_label,
+                    "page_count": None, "alert_msg": "",
+                    "raw_status_code": None, "milage_mm": _milage}
 
     # ── SNMP fallback ────────────────────────────────────────────────────
     raw_status = snmp_get(ip, OID_HR_PRINTER_STATUS, community)
     if raw_status is None:
-        return {"status": STATUS_OFFLINE, "page_count": None,
-                "alert_msg": "", "raw_status_code": None, "milage_mm": None}
+        return {"status": STATUS_OFFLINE, "status_label": "Offline",
+                "page_count": None, "alert_msg": "",
+                "raw_status_code": None, "milage_mm": None}
 
     page_count = snmp_get(ip, OID_PAGE_COUNT, community)
     if isinstance(page_count, str):
@@ -368,9 +470,10 @@ def get_printer_status(ip: str, community: str = "public") -> dict:
     else:
         status = STATUS_ONLINE
 
-    return {"status": status, "page_count": page_count,
-            "alert_msg": alert_msg, "raw_status_code": raw_status,
-            "milage_mm": None}
+    snmp_label = alert_msg.strip() if alert_msg else _default_status_label(status)
+    return {"status": status, "status_label": snmp_label,
+            "page_count": page_count, "alert_msg": alert_msg,
+            "raw_status_code": raw_status, "milage_mm": None}
 
 
 # ── Stock Manager ─────────────────────────────────────────────────────────────
@@ -845,7 +948,8 @@ class SupabaseLogger:
     def log(self, branch_id: str, branch_name: str,
             printer_id: str, printer_name: str, printer_ip: str,
             status: str, page_count, alert_msg: str,
-            event: str, stock_remaining=None, product_name=None):
+            event: str, stock_remaining=None, product_name=None,
+            status_label: str = None):
         if not self.client:
             return
         try:
@@ -862,9 +966,22 @@ class SupabaseLogger:
                 "stock_remaining": stock_remaining,
                 "timestamp":       datetime.now(timezone.utc).isoformat(),
             }
+            if status_label:
+                row["status_label"] = status_label
             if product_name:
                 row["product_name"] = product_name
-            self.client.table(self.table_name).insert(row).execute()
+            try:
+                self.client.table(self.table_name).insert(row).execute()
+            except Exception as col_err:
+                # ยังไม่รัน migration 018 — เก็บชื่อสถานะใน alert_msg แทน
+                err_s = str(col_err).lower()
+                if status_label and "status_label" in err_s:
+                    row.pop("status_label", None)
+                    if not row.get("alert_msg"):
+                        row["alert_msg"] = status_label
+                    self.client.table(self.table_name).insert(row).execute()
+                else:
+                    raise col_err
         except Exception as e:
             log_err(f"[Supabase ERROR] log: {e}")
 
@@ -989,8 +1106,9 @@ class PrinterWorker:
     def check_once(self, log_interval: int):
         info       = get_printer_status(self.cfg["ip"],
                                         self.cfg.get("snmp_community", "public"))
-        raw_status = info["status"]
-        alert_msg  = info["alert_msg"]
+        raw_status    = info["status"]
+        alert_msg     = info["alert_msg"]
+        status_label  = info.get("status_label") or _default_status_label(raw_status)
 
         # แปลง milage → page count สำหรับ HTTP mode (TSC TA300)
         if info["page_count"] is None and info.get("milage_mm"):
@@ -1016,7 +1134,8 @@ class PrinterWorker:
         self._print_console(effective_status, page_count, remaining,
                             offline_count=self.offline_count
                             if raw_status == STATUS_OFFLINE else 0,
-                            milage_mm=info.get("milage_mm"))
+                            milage_mm=info.get("milage_mm"),
+                            status_label=status_label)
 
         is_error = effective_status not in (STATUS_ONLINE, STATUS_PRINTING)
 
@@ -1024,25 +1143,27 @@ class PrinterWorker:
         if effective_status != self.last_status:
             if is_error:
                 # Critical alert — ส่งทันที ไม่มี cooldown ตอนเปลี่ยนสถานะใหม่
-                self._send_alert(effective_status, page_count, alert_msg, remaining)
+                self._send_alert(effective_status, page_count, alert_msg, remaining,
+                                 status_label=status_label)
                 self._mark_alerted(effective_status)
-                self._log(info, "error", remaining)
+                self._log(info, "error", remaining, status=effective_status)
             elif self.last_status is not None:
                 # กลับมาปกติ — แจ้งเสมอ ไม่มี cooldown
-                self._send_recovered(page_count, remaining)
+                self._send_recovered(page_count, remaining, status_label=status_label)
                 self._log(info, "recovered", remaining)
             self.last_status = effective_status
 
         elif is_error:
             # สถานะเดิม ยังเป็น error — re-alert ถ้าผ่าน cooldown แล้ว
             if self._should_alert(effective_status):
-                self._send_alert(effective_status, page_count, alert_msg, remaining)
+                self._send_alert(effective_status, page_count, alert_msg, remaining,
+                                 status_label=status_label)
                 self._mark_alerted(effective_status)
-            self._log(info, "error", remaining)
+            self._log(info, "error", remaining, status=effective_status)
 
         elif (time.time() - self.last_log_time) >= log_interval:
             # ปกติ — log ลง Supabase เงียบๆ ไม่ส่ง Telegram
-            self._log(info, "routine", remaining)
+            self._log(info, "routine", remaining, status=effective_status)
 
         # ─ เตือนสต็อกต่ำ (critical) ──────────────────────────────────────
         if 0 < remaining <= self.stock.low_stock_threshold:
@@ -1053,8 +1174,9 @@ class PrinterWorker:
             self.stock.low_stock_warned = False
 
     def _print_console(self, status: str, page_count, remaining: int,
-                       offline_count: int = 0, milage_mm=None):
-        text  = STATUS_TEXT.get(status, status)
+                       offline_count: int = 0, milage_mm=None,
+                       status_label: str = None):
+        text  = status_label or STATUS_TEXT.get(status, status)
         extra = f" (offline {offline_count}/{self.offline_confirm_checks})" \
                 if offline_count > 0 else ""
         milage_str = f"{milage_mm / 1_000_000:.3f}km" if milage_mm else "-"
@@ -1064,9 +1186,10 @@ class PrinterWorker:
             f"Milage: {milage_str:>9s} | Pages: {str(page_count):>8s} | "
             f"Stock: {remaining:>6,} rows")
 
-    def _send_alert(self, status: str, page_count, alert_msg: str, remaining: int):
+    def _send_alert(self, status: str, page_count, alert_msg: str, remaining: int,
+                    status_label: str = None):
         emoji = STATUS_EMOJI.get(status, "⚠️")
-        text  = STATUS_TEXT.get(status, status)
+        text  = status_label or STATUS_TEXT.get(status, status)
         msg = (
             f"🚨 <b>แจ้งเตือนปริ้นเตอร์</b>\n"
             f"🏪 สาขา: <b>{self.branch['name']}</b>\n"
@@ -1080,11 +1203,13 @@ class PrinterWorker:
         msg += f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
         self.telegram.send(msg)
 
-    def _send_recovered(self, page_count, remaining: int):
+    def _send_recovered(self, page_count, remaining: int, status_label: str = None):
+        label = status_label or "Ready"
         msg = (
             f"✅ <b>ปริ้นเตอร์กลับมาพร้อมใช้งาน</b>\n"
             f"🏪 สาขา: <b>{self.branch['name']}</b>\n"
             f"🖨️ เครื่อง: {self.cfg['name']} ({self.cfg['ip']})\n"
+            f"✅ สถานะ: <b>{label}</b>\n"
             f"📦 สต็อกคงเหลือ: {remaining:,} แถว\n"
             f"📊 ปริ้นสะสม: {page_count or '-'} ใบ\n"
             f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}"
@@ -1102,19 +1227,24 @@ class PrinterWorker:
         )
         self.telegram.send(msg)
 
-    def _log(self, info: dict, event: str, remaining: int):
+    def _log(self, info: dict, event: str, remaining: int, status: str = None):
+        st = status if status is not None else info["status"]
+        display = info.get("status_label") or _default_status_label(st)
+        # ใส่ชื่อสถานะจริงใน alert_msg ด้วย — หน้าเว็บอ่านได้แม้ยังไม่มีคอลัมน์ status_label
+        alert = (info.get("alert_msg") or "").strip() or display
         self.logger.log(
             branch_id       = self.branch["id"],
             branch_name     = self.branch["name"],
             printer_id      = self.cfg["id"],
             printer_name    = self.cfg["name"],
             printer_ip      = self.cfg["ip"],
-            status          = info["status"],
+            status          = st,
             page_count      = info["page_count"],
-            alert_msg       = info["alert_msg"],
+            alert_msg       = alert,
             event           = event,
             stock_remaining = remaining,
             product_name    = self.cfg.get("product_name") or None,
+            status_label    = display,
         )
         self.last_log_time = time.time()
 
