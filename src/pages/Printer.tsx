@@ -339,23 +339,27 @@ function usePrinterStatus() {
         () => new Map<string, 'online' | 'offline'>()
       )
 
-      let printerResult = await fetchLogs()
-      if (printerResult.error?.message?.includes('status_label')) {
-        printerResult = await supabase
+      const withLabel = await fetchLogs()
+      let rows: PrinterRecord[] | null
+      if (withLabel.error?.message?.includes('status_label')) {
+        const legacy = await supabase
           .from('printer_log')
           .select(colsLegacy)
           .order('timestamp', { ascending: false })
           .limit(2000)
+        if (legacy.error) throw legacy.error
+        rows = (legacy.data ?? []).map((r) => ({ ...r, status_label: null }))
+      } else {
+        if (withLabel.error) throw withLabel.error
+        rows = withLabel.data
       }
 
       const onlineMap = await onlineMapPromise
-      const { data: rows, error: err } = printerResult
-      if (err) throw err
 
       // เก็บแค่ record แรก (ล่าสุด) ของแต่ละ branch_id + printer_id คู่กัน
       // (ทุกสาขาใช้ชื่อ printer_id ซ้ำกัน เช่น printer_01 ต้องแยกด้วย branch_id)
       const seen = new Set<string>()
-      const latest = ((rows ?? []) as PrinterRecord[]).filter((r) => {
+      const latest = (rows ?? []).filter((r) => {
         const key = `${r.branch_id}__${r.printer_id}`
         if (seen.has(key)) return false
         seen.add(key)
