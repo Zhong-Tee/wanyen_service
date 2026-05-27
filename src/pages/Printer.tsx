@@ -161,7 +161,7 @@ function PrinterCommandMenu({
 
     const btnRect = btn.getBoundingClientRect()
     const menuWidth = 200
-    const menuHeight = menu?.offsetHeight ?? (mode === 'resetstock' ? 180 : 130)
+    const menuHeight = menu?.offsetHeight ?? (mode === 'resetstock' ? 180 : 80)
     const bottomNavReserve = 72
     const spaceBelow = window.innerHeight - btnRect.bottom - bottomNavReserve
     const openUp = spaceBelow < menuHeight + 8
@@ -205,25 +205,6 @@ function PrinterCommandMenu({
     return () => document.removeEventListener('mousedown', onClickOutside)
   }, [menuOpen, closeAll])
 
-  const sendTestPrint = async () => {
-    setSending(true)
-    try {
-      await enqueuePrinterCommand(branchId, 'testprint', [printerIndex, 1])
-      onToast({
-        message: `ส่ง Test Print สาขา ${branchId} · ${printer.printer_name} · 1 แผ่น`,
-        type: 'success',
-      })
-      closeAll()
-    } catch (e: unknown) {
-      onToast({
-        message: e instanceof Error ? e.message : 'ส่งคำสั่งไม่สำเร็จ',
-        type: 'error',
-      })
-    } finally {
-      setSending(false)
-    }
-  }
-
   const sendResetStock = async () => {
     const rows = parseInt(resetStock, 10)
     if (!rows || rows <= 0) {
@@ -264,16 +245,8 @@ function PrinterCommandMenu({
             <button
               type="button"
               disabled={sending}
-              onClick={() => void sendTestPrint()}
-              className="w-full text-left px-3 py-2 hover:bg-pink-50 disabled:opacity-50"
-            >
-              🖨️ Test Print
-            </button>
-            <button
-              type="button"
-              disabled={sending}
               onClick={() => setMode('resetstock')}
-              className="w-full text-left px-3 py-2 hover:bg-pink-50 disabled:opacity-50 border-t border-gray-100"
+              className="w-full text-left px-3 py-2 hover:bg-pink-50 disabled:opacity-50"
             >
               📦 Reset Stock
             </button>

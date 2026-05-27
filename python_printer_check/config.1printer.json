@@ -1,0 +1,61 @@
+{
+  "_comment": "Config สำหรับสาขาที่มี 1 ปริ้นเตอร์ — คัดลอกไปเป็น config.json หรือแก้ค่าให้ตรงสาขาแล้วเปลี่ยนชื่อ",
+
+  "branch": {
+    "id": "100",
+    "name": "100 B2S RBS Samutpakarn"
+  },
+
+  "telegram": {
+    "_comment_mode": "command_mode: branch (หลายสาขา) | direct (สาขาเดียว)",
+    "bot_token": "8819195951:AAGao6LeM4Btfe39bfdxR0Dyf4kYJafRB4c",
+    "chat_id": "-5256056032",
+    "command_mode": "branch",
+    "command_hub": false,
+    "require_branch": true,
+    "queue_poll_seconds": 5
+  },
+
+  "supabase": {
+    "_comment": "ถ้าไม่ใช้ Supabase ให้เว้น url และ key ว่างไว้",
+    "url": "https://ljbvhppbcdczghxnvebt.supabase.co",
+    "key": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxqYnZocHBiY2RjemdoeG52ZWJ0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzkwNDIzNzQsImV4cCI6MjA5NDYxODM3NH0.4Qk5J0PctP7ea0yHjEkjr4sziN8_WEs-rnshctwIkgU",
+    "table_name": "printer_log"
+  },
+
+  "printers": [
+    {
+      "id": "printer_01",
+      "name": "ปริ้นเตอร์ 1",
+      "ip": "192.168.31.111",
+      "snmp_community": "public",
+      "product_name": "ชื่อสินค้าให้ตรงกับในระบบ",
+      "sticker": {
+        "height_mm": 11,
+        "gap_mm": 2,
+        "initial_stock": 3846,
+        "low_stock_threshold": 150,
+        "stock_count_file": "stock_printer_01.json"
+      }
+    }
+  ],
+
+  "alert": {
+    "_comment": "ตั้งค่าการแจ้งเตือน Telegram",
+    "offline_confirm_checks": 3,
+    "cooldown_minutes": 30,
+    "notify_startup": false
+  },
+
+  "check_interval": 30,
+  "log_interval": 300,
+
+  "kiosk": {
+    "_comment": "เปลี่ยน UI จากหน้า Stock — path ใช้ / ไม่ใช่ \\",
+    "app_dir": "E:/Wanyen Kiosk V.2/Install WanyenKiosk V2/4.folder program/app_cust_V.6",
+    "exe_name": "st_sticker.exe",
+    "ui_rebuild_dir": "E:/Wanyen Kiosk V.2/Install WanyenKiosk V2/7.UI Build&Poin/UI Rebuild/Rebuild B2S",
+    "close_timeout_sec": 10,
+    "start_timeout_sec": 15
+  }
+}

@@ -13,7 +13,7 @@
 
   "telegram": {
     "_comment_mode": "command_mode: branch — Hub + สาขา local ยัง poll queue ของ branch.id ตัวเอง",
-    "_comment_hub": "command_hub: true = รับ /status /testprint /resetstock จาก Telegram แล้ว enqueue ให้สาขา",
+    "_comment_hub": "command_hub: true = รับ /status /resetstock จาก Telegram แล้ว enqueue ให้สาขา",
     "bot_token": "8819195951:AAGao6LeM4Btfe39bfdxR0Dyf4kYJafRB4c",
     "chat_id": "-5256056032",
     "command_mode": "branch",
@@ -29,11 +29,6 @@
     "table_name": "printer_log"
   },
 
-  "bartender": {
-    "_comment": "ใช้เมื่อ Hub เป็นสาขาที่มีปริ้น — Hub อย่างเดียว (printers: []) ไม่จำเป็น",
-    "exe_path": "C:/Program Files (x86)/Seagull/BarTender 7.10/Trial/bartend.exe"
-  },
-
   "_comment6": "Hub อย่างเดียว: เปลี่ยนเป็น \"printers\": [] แล้วลบ product_name/sticker ออก",
   "printers": [
     {
@@ -42,7 +37,6 @@
       "ip": "192.168.1.111",
       "snmp_community": "public",
       "product_name": "ชื่อสินค้าให้ตรงกับในระบบ",
-      "bartender_template": "C:/ST/app_cust_V.6/FormatSA.btw",
       "sticker": {
         "height_mm": 11,
         "gap_mm": 2,
@@ -57,7 +51,6 @@
       "ip": "192.168.1.112",
       "snmp_community": "public",
       "product_name": "ชื่อสินค้าให้ตรงกับในระบบ",
-      "bartender_template": "C:/ST/app_cust_V.6/FormatMH2.btw",
       "sticker": {
         "height_mm": 11,
         "gap_mm": 2,

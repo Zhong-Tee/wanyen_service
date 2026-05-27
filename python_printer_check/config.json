@@ -33,31 +33,18 @@
     {
       "id": "printer_01",
       "name": "ปริ้นเตอร์ 1",
+      "windows_printer_name": "Printer_01",
+      "_comment_windows_printer_name": "ชื่อใน Devices and Printers — BarTender /PRN= ต้องตรงกับชื่อนี้ ไม่ใช่ name",
       "ip": "192.168.31.111",
       "snmp_community": "public",
       "product_name": "ชื่อสินค้าให้ตรงกับในระบบ",
-      "bartender_template": "C:/ST/app_cust_V.6/FormatSA.btw",
+      "bartender_template": "E:/Wanyen Kiosk V.2/Install WanyenKiosk V2/4.folder program/app_cust_V.6/FormatSA.btw",
       "sticker": {
         "height_mm": 11,
         "gap_mm": 2,
         "initial_stock": 3846,
         "low_stock_threshold": 150,
         "stock_count_file": "stock_printer_01.json"
-      }
-    },
-    {
-      "id": "printer_02",
-      "name": "ปริ้นเตอร์ 2",
-      "ip": "192.168.31.112",
-      "snmp_community": "public",
-      "product_name": "ชื่อสินค้าให้ตรงกับในระบบ",
-      "bartender_template": "C:/ST/app_cust_V.6/FormatMH2.btw",
-      "sticker": {
-        "height_mm": 11,
-        "gap_mm": 2,
-        "initial_stock": 3846,
-        "low_stock_threshold": 150,
-        "stock_count_file": "stock_printer_02.json"
       }
     }
   ],

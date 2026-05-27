@@ -745,6 +745,107 @@ class TelegramNotifier:
 
 
 # ── Bartender Print ───────────────────────────────────────────────────────────
+def resolve_windows_printer_name(printer_cfg: dict) -> str:
+    """
+    ชื่อปริ้นเตอร์สำหรับ BarTender /PRN= ต้องตรงกับ Devices and Printers ใน Windows
+    (ไม่ใช่ชื่อแสดงผลใน UI/Telegram เช่น 'ปริ้นเตอร์ 1')
+    """
+    explicit = (printer_cfg.get("windows_printer_name") or "").strip()
+    if explicit:
+        return explicit
+    pid = str(printer_cfg.get("id", "")).strip()
+    if pid.startswith("printer_"):
+        suffix = pid[len("printer_"):]
+        if suffix.isdigit():
+            return f"Printer_{suffix.zfill(2)}"
+        return f"Printer_{suffix}"
+    return str(printer_cfg.get("name", "")).strip()
+
+
+def _printer_page_count(info: dict, mm_per_label: float):
+    """ดึง page count จาก SNMP หรือ milage (TSC HTTP)"""
+    if info.get("page_count") is not None:
+        return info["page_count"]
+    milage = info.get("milage_mm")
+    if milage is not None and mm_per_label:
+        return int(milage / mm_per_label)
+    return None
+
+
+def _windows_spooler_job_count(printer_name: str) -> int:
+    """นับงานใน Windows print queue (เฉพาะ win32)"""
+    if sys.platform != "win32" or not printer_name:
+        return 0
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             f"(Get-PrintJob -PrinterName '{printer_name}' "
+             f"-ErrorAction SilentlyContinue | Measure-Object).Count"],
+            capture_output=True, text=True, timeout=10,
+            **_subprocess_hide_window_kwargs(),
+        )
+        return int((r.stdout or "").strip() or "0")
+    except Exception:
+        return 0
+
+
+def _format_print_failure_hint(win_prn: str, template: str,
+                               detail: str, spooler_jobs: int) -> str:
+    """ข้อความแนะนำเมื่อ test print ไม่ผ่าน"""
+    lines = [f"BarTender ตอบ OK แต่ปริ้นเตอร์ไม่ทำงาน — {detail}"]
+    if spooler_jobs == 0:
+        lines.append(
+            f"ไม่พบงานใน Windows print queue ({win_prn}) "
+            f"→ ปัญหาอยู่ที่ BarTender ไม่ได้ส่งงานออก"
+        )
+        lines.append(
+            f"ลองเปิด template ใน BarTender แล้วกด Print: {template}"
+        )
+        lines.append(
+            "ตรวจ BarTender 7.10 (license/crack) และ path bartender.exe ใน config"
+        )
+    else:
+        lines.append(
+            f"มีงานค้างใน queue {spooler_jobs} งาน — ตรวจ driver/port "
+            f"({win_prn})"
+        )
+    lines.append(
+        "ถ้า Print Test Page จาก Windows พิมพ์ได้ แปลว่า IP/port ปริ้นเตอร์ถูกแล้ว"
+    )
+    return "\n".join(lines)
+
+
+def verify_print_job(ip: str, community: str, before_count,
+                     copies: int, mm_per_label: float,
+                     timeout_sec: int = 20) -> tuple:
+    """
+    ยืนยันว่าปริ้นเตอร์รับงานจริง — ดูสถานะ Printing หรือ page count เพิ่ม
+    คืน (verified: bool, detail: str)
+    """
+    deadline = time.time() + timeout_sec
+    saw_printing = False
+    while time.time() < deadline:
+        info = get_printer_status(ip, community)
+        if info["status"] == STATUS_PRINTING:
+            saw_printing = True
+        after = _printer_page_count(info, mm_per_label)
+        if before_count is not None and after is not None:
+            delta = after - before_count
+            if delta >= copies:
+                return True, f"page count +{delta}"
+        elif saw_printing and info["status"] == STATUS_ONLINE:
+            return True, "สถานะ Printing แล้วกลับ Ready"
+        time.sleep(2)
+    if saw_printing:
+        return True, "ตรวจพบสถานะ Printing"
+    if before_count is None:
+        return False, "ไม่สามารถอ่าน page count ก่อนพิมพ์ — ตรวจสอบไม่ได้"
+    return False, (
+        f"page count ไม่เปลี่ยน (ก่อน {before_count} หลัง "
+        f"{_printer_page_count(get_printer_status(ip, community), mm_per_label)})"
+    )
+
+
 class BartenderPrint:
     def __init__(self, exe_path: str):
         self.exe_path = exe_path
@@ -766,14 +867,18 @@ class BartenderPrint:
         if printer_name:
             cmd.append(f'/PRN={printer_name}')
 
+        log(f"[BarTender] {' '.join(cmd)}")
         try:
             result = subprocess.run(
                 cmd, timeout=30, capture_output=True,
                 **_subprocess_hide_window_kwargs(),
             )
-            if result.returncode == 0:
-                return True, f"สั่งพิมพ์ {copies} ใบ สำเร็จ"
-            return False, f"Bartender ส่งคืน exit code: {result.returncode}"
+            if result.returncode != 0:
+                err = (result.stderr or result.stdout or b"").decode(
+                    "utf-8", errors="replace").strip()
+                detail = f" — {err}" if err else ""
+                return False, f"Bartender exit code {result.returncode}{detail}"
+            return True, f"ส่งคำสั่ง BarTender แล้ว ({copies} ใบ → {printer_name})"
         except subprocess.TimeoutExpired:
             return False, "Timeout — Bartender ใช้เวลานานเกินไป"
         except Exception as e:
@@ -1252,7 +1357,24 @@ class PrinterWorker:
         template = self.cfg.get("bartender_template", "")
         if not template:
             return False, "ไม่ได้กำหนด bartender_template ใน config"
-        return self.bartender.print_template(template, self.cfg["name"], copies)
+        win_prn = resolve_windows_printer_name(self.cfg)
+        if not win_prn:
+            return False, "ไม่ได้กำหนด windows_printer_name ใน config"
+        community = self.cfg.get("snmp_community", "public")
+        before_info = get_printer_status(self.cfg["ip"], community)
+        before_count = _printer_page_count(before_info, self.stock.mm_per_label)
+        ok, msg = self.bartender.print_template(template, win_prn, copies)
+        if not ok:
+            return False, msg
+        time.sleep(1)
+        spooler_jobs = _windows_spooler_job_count(win_prn)
+        verified, detail = verify_print_job(
+            self.cfg["ip"], community, before_count, copies,
+            self.stock.mm_per_label)
+        if verified:
+            return True, f"สั่งพิมพ์ {copies} ใบ สำเร็จ ({detail})"
+        return False, _format_print_failure_hint(
+            win_prn, template, detail, spooler_jobs)
 
 
 # ขั้นตอนเปลี่ยน UI — ใช้ใน error message
@@ -1389,6 +1511,8 @@ class CommandExecutor:
         ok, msg = pw.test_print(copies)
         icon = "✅" if ok else "❌"
         self.telegram.send(f"{icon} <b>{pw.cfg['name']}</b>: {msg}")
+        if not ok:
+            raise RuntimeError(msg)
 
     def _cmd_reset_stock(self, printer_idx: int, new_stock):
         if not self.printers:
