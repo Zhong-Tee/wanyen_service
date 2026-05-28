@@ -145,3 +145,21 @@ export interface UiChangeLog {
   ui_name: string
   created_at: string
 }
+
+// ── LINE OA Plus — เพิ่มพอยท์ ───────────────────────────────────────────────
+
+export type LinePointStatus = 'pending' | 'exported' | 'uploaded' | 'success' | 'failed'
+
+export interface LinePointQueue {
+  id: string
+  billing_id: string
+  phone: string
+  amount_baht: number
+  branch_name: string
+  status: LinePointStatus
+  batch_id: string | null
+  error_message: string | null
+  created_at: string
+  exported_at: string | null
+  processed_at: string | null
+}

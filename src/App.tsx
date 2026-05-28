@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Layout } from './components/Layout'
 import type { Page } from './components/Layout'
+import { loadActivePage, saveActivePage } from './lib/activePage'
 import { ToastContainer, useToast } from './components/Toast'
 import { useBadgeCounts } from './hooks/useBadgeCounts'
 import { IssueCode } from './pages/IssueCode'
@@ -12,15 +13,16 @@ import { Catalog } from './pages/Catalog'
 import { DeliveryPage } from './pages/Delivery'
 import { Printer } from './pages/Printer'
 import { ChangeUI } from './pages/ChangeUI'
+import { PointPage } from './pages/Point'
 
 export default function App() {
-  const [activePage, setActivePage] = useState<Page>('issue')
+  const [activePage, setActivePage] = useState<Page>(loadActivePage)
   const { toasts, removeToast } = useToast()
   const { counts, refresh: refreshBadges } = useBadgeCounts()
 
   const handleNavigate = (page: Page) => {
     setActivePage(page)
-    // Refresh badge counts on navigation
+    saveActivePage(page)
     refreshBadges()
   }
 
@@ -28,12 +30,13 @@ export default function App() {
     <>
       <Layout activePage={activePage} onNavigate={handleNavigate} badges={counts}>
         {activePage === 'issue'    && <IssueCode />}
-        {activePage === 'printer'  && <Printer />}
+        {activePage === 'point'    && <PointPage />}
         {activePage === 'catalog'  && <Catalog />}
         {activePage === 'stock'    && <Stock />}
         {activePage === 'job'      && <JobPage onAction={refreshBadges} />}
         {activePage === 'delivery' && <DeliveryPage onAction={refreshBadges} />}
         {activePage === 'report'   && <Report serviceAlertCount={counts.service} />}
+        {activePage === 'printer'  && <Printer />}
         {activePage === 'changeui' && <ChangeUI />}
         {activePage === 'settings' && <Settings />}
       </Layout>
