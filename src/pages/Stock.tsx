@@ -5,6 +5,8 @@ import { useProducts } from '../hooks/useProducts'
 import { useSheetSync } from '../hooks/useSheetSync'
 import type { SyncUnmatched } from '../hooks/useSheetSync'
 import { showToast } from '../components/Toast'
+import { useStockTemplate } from '../hooks/useAppSettings'
+import { buildStockMessage } from '../lib/template'
 import type { StoreGroup, BranchStock, StockStatus } from '../types'
 
 const STATUS_PRIORITY: Record<StockStatus, number> = { 'กำลังใช้': 0, 'เก็บ': 1, 'หมด': 2 }
@@ -33,6 +35,7 @@ export function Stock() {
   const { products } = useProducts()
   const { stock, loading: stockLoading, fetchByBranch, setStatus, addProductToBranch } = useStock()
   const { syncing, syncError, result, sync } = useSheetSync()
+  const { template: stockTemplate } = useStockTemplate()
 
   const [selectedGroup, setSelectedGroup] = useState<string>('')
   const [selectedBranch, setSelectedBranch] = useState<string>('')
@@ -129,6 +132,17 @@ export function Stock() {
   const handleManualSync = async () => {
     await sync()
     if (selectedBranch) fetchByBranch(selectedBranch)
+  }
+
+  const handleCopyStock = async (item: BranchStock) => {
+    const productName = item.product?.name ?? '—'
+    const text = buildStockMessage(productName, item.quantity, stockTemplate)
+    try {
+      await navigator.clipboard.writeText(text)
+      showToast('คัดลอกข้อความสำเร็จ', 'success')
+    } catch {
+      showToast('คัดลอกไม่ได้ กรุณาลองใหม่', 'error')
+    }
   }
 
   return (
@@ -396,6 +410,7 @@ export function Stock() {
                   onQuantityChange={(id, val) => setQuantityInputs((prev) => ({ ...prev, [id]: val }))}
                   onZoomImage={setZoomImage}
                   onCancelDelete={() => setConfirmDeleteId(null)}
+                  onCopy={() => handleCopyStock(item)}
                 />
               ))}
             </div>
@@ -500,6 +515,7 @@ interface StockCardProps {
   onQuantityChange: (id: string, val: string) => void
   onZoomImage: (url: string) => void
   onCancelDelete: () => void
+  onCopy: () => void
 }
 
 function StockCard({
@@ -511,6 +527,7 @@ function StockCard({
   onQuantityChange,
   onZoomImage,
   onCancelDelete,
+  onCopy,
 }: StockCardProps) {
   const [showQtyInput, setShowQtyInput] = useState(false)
   const isUpdating = updatingId === item.id
@@ -614,6 +631,10 @@ function StockCard({
               <button onClick={() => onSetStatus(item, 'หมด')} disabled={isUpdating}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-50 text-red-500 hover:bg-red-100 border border-red-200 transition-all active:scale-95 disabled:opacity-50">
                 🚫 หมด
+              </button>
+              <button onClick={onCopy} disabled={isUpdating}
+                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-pink-50 text-pink-600 hover:bg-pink-100 border border-pink-200 transition-all active:scale-95 disabled:opacity-50 ml-auto">
+                📋 คัดลอก
               </button>
             </div>
           )}

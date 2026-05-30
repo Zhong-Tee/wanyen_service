@@ -341,40 +341,48 @@ function usePrinterStatus() {
     new Map()
   )
   const [initialLoading, setInitialLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [clockTick, setClockTick] = useState(0)
   const hasLoadedRef = useRef(false)
+  const inFlightRef = useRef(0)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const refreshBranchOnlineMap = useCallback(async () => {
+    const empty = new Map<string, 'online' | 'offline'>()
+    try {
+      const onlineMap = await Promise.race([
+        fetchBranchOnlineMap(),
+        new Promise<Map<string, 'online' | 'offline'>>((resolve) =>
+          setTimeout(() => resolve(empty), 15_000)
+        ),
+      ])
+      setBranchOnlineMap(onlineMap)
+    } catch {
+      setBranchOnlineMap(empty)
+    }
+  }, [])
+
   const refresh = useCallback(async (options?: { silent?: boolean; full?: boolean }) => {
-    const silent = options?.silent ?? hasLoadedRef.current
+    const silent = options?.silent === true
     const full = options?.full ?? !hasLoadedRef.current
 
-    if (!silent) {
-      if (hasLoadedRef.current) setRefreshing(true)
-      else setInitialLoading(true)
-    }
+    inFlightRef.current += 1
+    if (!silent && !hasLoadedRef.current) setInitialLoading(true)
     setError(null)
     try {
-      const [latest, onlineMap] = await Promise.all([
-        fetchLatestPrinterRecords(),
-        full
-          ? fetchBranchOnlineMap().catch(() => new Map<string, 'online' | 'offline'>())
-          : Promise.resolve(null),
-      ])
+      const latest = await fetchLatestPrinterRecords()
       setData(latest)
-      if (onlineMap) setBranchOnlineMap(onlineMap)
       setLastRefresh(new Date())
       hasLoadedRef.current = true
+      if (full) void refreshBranchOnlineMap()
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'โหลดข้อมูลไม่สำเร็จ')
     } finally {
-      setInitialLoading(false)
-      setRefreshing(false)
+      inFlightRef.current = Math.max(0, inFlightRef.current - 1)
+      if (inFlightRef.current === 0) setInitialLoading(false)
     }
-  }, [])
+  }, [refreshBranchOnlineMap])
 
   const scheduleSilentRefresh = useCallback(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current)
@@ -413,10 +421,8 @@ function usePrinterStatus() {
     data,
     branchOnlineMap,
     loading: initialLoading,
-    refreshing,
     error,
     lastRefresh,
-    refresh,
     clockTick,
   }
 }
@@ -432,8 +438,7 @@ function isBranchMachineOffline(
 }
 
 export function Printer() {
-  const { data, branchOnlineMap, loading, refreshing, error, lastRefresh, refresh, clockTick } =
-    usePrinterStatus()
+  const { data, branchOnlineMap, loading, error, lastRefresh, clockTick } = usePrinterStatus()
   const { storeGroups, branches, loading: branchLoading } = useBranches()
   const [search, setSearch] = useState('')
   const [filterGroupId, setFilterGroupId] = useState('')
@@ -529,31 +534,21 @@ export function Printer() {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Printer Dashboard</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            สถานะปริ้นเตอร์แบบ Real-time
-            {lastRefresh && (
-              <span className="ml-2 text-xs text-gray-400">
-                · อัปเดต{' '}
-                {lastRefresh.toLocaleTimeString('th-TH', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  second: '2-digit',
-                })}
-              </span>
-            )}
-          </p>
-        </div>
-        <button
-          onClick={() => refresh({ full: true })}
-          disabled={loading || refreshing}
-          className="flex items-center gap-1.5 text-sm text-pink-600 font-medium bg-pink-50 px-3 py-1.5 rounded-lg hover:bg-pink-100 disabled:opacity-50 flex-shrink-0"
-        >
-          <span className={refreshing ? 'animate-spin inline-block' : ''}>🔄</span>
-          รีเฟรช
-        </button>
+      <div>
+        <h1 className="text-xl font-bold text-gray-900">Printer Dashboard</h1>
+        <p className="text-sm text-gray-500 mt-0.5">
+          สถานะปริ้นเตอร์แบบ Real-time
+          {lastRefresh && (
+            <span className="ml-2 text-xs text-gray-400">
+              · อัปเดต{' '}
+              {lastRefresh.toLocaleTimeString('th-TH', {
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+              })}
+            </span>
+          )}
+        </p>
       </div>
 
       {/* Summary cards */}

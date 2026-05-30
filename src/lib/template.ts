@@ -36,3 +36,16 @@ export function buildMessage(
   const cutAt = codeLineIdx === -1 ? lines.length - 1 : codeLineIdx
   return lines.slice(0, cutAt + 1).join('\n').trimEnd()
 }
+
+export const DEFAULT_STOCK_TEMPLATE = `{{PRODUCT}}
+จำนวน {{QUANTITY}} แผ่น`
+
+export function buildStockMessage(
+  productName: string,
+  quantity: number,
+  template: string
+): string {
+  return template
+    .replace(/\{\{PRODUCT\}\}/g, productName)
+    .replace(/\{\{QUANTITY\}\}/g, String(quantity))
+}

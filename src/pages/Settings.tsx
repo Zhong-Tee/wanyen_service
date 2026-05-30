@@ -7,10 +7,11 @@ import { useProducts } from '../hooks/useProducts'
 import { useStockReport } from '../hooks/useStockReport'
 import { parseExcelCodes } from '../lib/excel'
 import type { ExcelCodeEntry } from '../lib/excel'
-import { DEFAULT_TEMPLATE } from '../lib/template'
+import { DEFAULT_TEMPLATE, DEFAULT_STOCK_TEMPLATE } from '../lib/template'
 import { showToast } from '../components/Toast'
 import { ZoomImage } from '../components/ZoomImage'
 import { supabase } from '../lib/supabase'
+import { useStockTemplate } from '../hooks/useAppSettings'
 import type { CodeCategory, ImportResult, StoreGroup, Branch, Product } from '../types'
 
 type SettingsTab = 'general' | 'store-groups' | 'branches' | 'products' | 'import-sales'
@@ -57,6 +58,7 @@ export function Settings() {
 function GeneralTab() {
   const { categories, loading: catLoading, createCategory, updateCategoryName, updateCategoryTemplate, deleteCategory } = useCategories()
   const { importing, importCodes } = useImportCodes()
+  const { template: stockTemplate, loading: stockTemplateLoading, saving: savingStockTemplate, updateTemplate: updateStockTemplate } = useStockTemplate()
 
   const [newCatName, setNewCatName] = useState('')
   const [creatingCat, setCreatingCat] = useState(false)
@@ -75,6 +77,9 @@ function GeneralTab() {
   const [editingNameId, setEditingNameId] = useState<string | null>(null)
   const [nameDraft, setNameDraft] = useState('')
   const [savingName, setSavingName] = useState(false)
+
+  const [stockTemplateDraft, setStockTemplateDraft] = useState('')
+  const [editingStockTemplate, setEditingStockTemplate] = useState(false)
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -110,6 +115,26 @@ function GeneralTab() {
     setSavingTemplate(false)
     if (error) showToast(`บันทึกไม่ได้: ${error}`, 'error')
     else { showToast('บันทึก Template สำเร็จ', 'success'); closeTemplateEditor() }
+  }
+
+  const openStockTemplateEditor = () => {
+    setStockTemplateDraft(stockTemplate)
+    setEditingStockTemplate(true)
+  }
+
+  const closeStockTemplateEditor = () => {
+    setEditingStockTemplate(false)
+    setStockTemplateDraft('')
+  }
+
+  const handleSaveStockTemplate = async () => {
+    if (!stockTemplateDraft.includes('{{PRODUCT}}') || !stockTemplateDraft.includes('{{QUANTITY}}')) {
+      showToast('Template ต้องมี {{PRODUCT}} และ {{QUANTITY}}', 'error')
+      return
+    }
+    const { error } = await updateStockTemplate(stockTemplateDraft)
+    if (error) showToast(`บันทึกไม่ได้: ${error}`, 'error')
+    else { showToast('บันทึก Template Stock สำเร็จ', 'success'); closeStockTemplateEditor() }
   }
 
   const handleDeleteCategory = async (cat: CodeCategory) => {
@@ -241,6 +266,46 @@ function GeneralTab() {
               </div>
             ))}
           </div>
+        )}
+      </section>
+
+      <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">Template ข้อความแจ้ง Stock</h2>
+          {!editingStockTemplate && (
+            <button onClick={openStockTemplateEditor} disabled={stockTemplateLoading}
+              className="px-3 py-1.5 rounded-lg text-xs font-medium bg-pink-50 text-pink-600 hover:bg-pink-100 transition-all active:scale-95 disabled:opacity-50">
+              แก้ไข Template
+            </button>
+          )}
+        </div>
+        {stockTemplateLoading ? (
+          <div className="h-16 bg-gray-100 rounded-xl animate-pulse" />
+        ) : editingStockTemplate ? (
+          <div className="border border-pink-200 rounded-xl bg-pink-50 p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-semibold text-pink-700">✏️ แก้ไข Template แจ้ง Stock</p>
+              <span className="text-xs text-pink-500">ใช้ {'{{PRODUCT}}'} และ {'{{QUANTITY}}'}</span>
+            </div>
+            <textarea value={stockTemplateDraft} onChange={(e) => setStockTemplateDraft(e.target.value)} rows={6} spellCheck={false}
+              className="w-full border border-pink-200 rounded-lg px-3 py-2 text-sm font-mono bg-white focus:outline-none focus:ring-2 focus:ring-pink-400 resize-y" />
+            {(!stockTemplateDraft.includes('{{PRODUCT}}') || !stockTemplateDraft.includes('{{QUANTITY}}')) && (
+              <p className="text-xs text-red-500 font-medium">⚠️ Template ต้องมี {'{{PRODUCT}}'} และ {'{{QUANTITY}}'}</p>
+            )}
+            <div className="flex gap-2">
+              <button onClick={() => setStockTemplateDraft(DEFAULT_STOCK_TEMPLATE)}
+                className="px-3 py-2 rounded-lg border border-gray-200 text-gray-500 text-xs font-medium hover:bg-gray-100">รีเซ็ต</button>
+              <button onClick={closeStockTemplateEditor}
+                className="px-3 py-2 rounded-lg border border-gray-200 text-gray-600 text-xs font-medium hover:bg-gray-50">ยกเลิก</button>
+              <button onClick={handleSaveStockTemplate}
+                disabled={savingStockTemplate || !stockTemplateDraft.includes('{{PRODUCT}}') || !stockTemplateDraft.includes('{{QUANTITY}}')}
+                className="flex-1 py-2 rounded-lg bg-pink-600 text-white text-xs font-bold disabled:opacity-50 hover:bg-pink-700 active:scale-95">
+                {savingStockTemplate ? 'กำลังบันทึก...' : '💾 บันทึก Template'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <pre className="text-sm text-gray-700 whitespace-pre-wrap font-mono bg-gray-50 rounded-xl p-4 border border-gray-100">{stockTemplate}</pre>
         )}
       </section>
 
