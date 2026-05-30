@@ -340,46 +340,85 @@ function usePrinterStatus() {
   const [branchOnlineMap, setBranchOnlineMap] = useState<Map<string, 'online' | 'offline'>>(
     new Map()
   )
-  const [loading, setLoading] = useState(true)
+  const [initialLoading, setInitialLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
   const [clockTick, setClockTick] = useState(0)
+  const hasLoadedRef = useRef(false)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const refresh = useCallback(async () => {
-    setLoading(true)
+  const refresh = useCallback(async (options?: { silent?: boolean; full?: boolean }) => {
+    const silent = options?.silent ?? hasLoadedRef.current
+    const full = options?.full ?? !hasLoadedRef.current
+
+    if (!silent) {
+      if (hasLoadedRef.current) setRefreshing(true)
+      else setInitialLoading(true)
+    }
     setError(null)
     try {
       const [latest, onlineMap] = await Promise.all([
         fetchLatestPrinterRecords(),
-        fetchBranchOnlineMap().catch(() => new Map<string, 'online' | 'offline'>()),
+        full
+          ? fetchBranchOnlineMap().catch(() => new Map<string, 'online' | 'offline'>())
+          : Promise.resolve(null),
       ])
       setData(latest)
-      setBranchOnlineMap(onlineMap)
+      if (onlineMap) setBranchOnlineMap(onlineMap)
       setLastRefresh(new Date())
+      hasLoadedRef.current = true
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'โหลดข้อมูลไม่สำเร็จ')
     } finally {
-      setLoading(false)
+      setInitialLoading(false)
+      setRefreshing(false)
     }
   }, [])
 
-  useEffect(() => { refresh() }, [refresh])
+  const scheduleSilentRefresh = useCallback(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(() => {
+      debounceRef.current = null
+      refresh({ silent: true })
+    }, 3000)
+  }, [refresh])
+
+  useEffect(() => {
+    refresh({ full: true })
+  }, [refresh])
 
   useEffect(() => {
     const channel = supabase
       .channel('printer-dashboard')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'printer_log' }, () => refresh())
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'printer_log' },
+        () => scheduleSilentRefresh()
+      )
       .subscribe()
 
-    return () => { supabase.removeChannel(channel) }
-  }, [refresh])
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+      supabase.removeChannel(channel)
+    }
+  }, [scheduleSilentRefresh])
 
   useEffect(() => {
     const tick = setInterval(() => setClockTick((n) => n + 1), 60_000)
     return () => clearInterval(tick)
   }, [])
 
-  return { data, branchOnlineMap, loading, error, lastRefresh, refresh, clockTick }
+  return {
+    data,
+    branchOnlineMap,
+    loading: initialLoading,
+    refreshing,
+    error,
+    lastRefresh,
+    refresh,
+    clockTick,
+  }
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
@@ -393,7 +432,8 @@ function isBranchMachineOffline(
 }
 
 export function Printer() {
-  const { data, branchOnlineMap, loading, error, lastRefresh, refresh, clockTick } = usePrinterStatus()
+  const { data, branchOnlineMap, loading, refreshing, error, lastRefresh, refresh, clockTick } =
+    usePrinterStatus()
   const { storeGroups, branches, loading: branchLoading } = useBranches()
   const [search, setSearch] = useState('')
   const [filterGroupId, setFilterGroupId] = useState('')
@@ -507,11 +547,11 @@ export function Printer() {
           </p>
         </div>
         <button
-          onClick={refresh}
-          disabled={loading}
+          onClick={() => refresh({ full: true })}
+          disabled={loading || refreshing}
           className="flex items-center gap-1.5 text-sm text-pink-600 font-medium bg-pink-50 px-3 py-1.5 rounded-lg hover:bg-pink-100 disabled:opacity-50 flex-shrink-0"
         >
-          <span className={loading ? 'animate-spin inline-block' : ''}>🔄</span>
+          <span className={refreshing ? 'animate-spin inline-block' : ''}>🔄</span>
           รีเฟรช
         </button>
       </div>

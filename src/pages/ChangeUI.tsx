@@ -35,6 +35,7 @@ export function ChangeUI() {
     create,
     update,
     deactivate,
+    activate,
     refresh: refreshOptions,
   } = useKioskUiOptions()
 
@@ -512,6 +513,7 @@ export function ChangeUI() {
           onCreate={create}
           onUpdate={update}
           onDeactivate={deactivate}
+          onActivate={activate}
           onRefresh={refreshOptions}
         />
       )}
@@ -527,6 +529,7 @@ function UiSettingsModal({
   onCreate,
   onUpdate,
   onDeactivate,
+  onActivate,
   onRefresh,
 }: {
   storeGroups: StoreGroup[]
@@ -536,6 +539,7 @@ function UiSettingsModal({
   onCreate: (name: string, storeGroupId: string) => Promise<{ error: string | null }>
   onUpdate: (id: string, data: { name?: string }) => Promise<{ error: string | null }>
   onDeactivate: (id: string) => Promise<{ error: string | null }>
+  onActivate: (id: string) => Promise<{ error: string | null }>
   onRefresh: () => void
 }) {
   const [settingsGroupId, setSettingsGroupId] = useState(initialStoreGroupId)
@@ -546,6 +550,7 @@ function UiSettingsModal({
   const [savingEdit, setSavingEdit] = useState(false)
   const [deactivatingId, setDeactivatingId] = useState<string | null>(null)
   const [confirmDeactivateId, setConfirmDeactivateId] = useState<string | null>(null)
+  const [activatingId, setActivatingId] = useState<string | null>(null)
 
   const groupOptions = allOptions.filter((o) => o.store_group_id === settingsGroupId)
   const activeList = groupOptions.filter((o) => o.is_active)
@@ -591,6 +596,17 @@ function UiSettingsModal({
     if (error) showToast(`ปิดใช้งานไม่ได้: ${error}`, 'error')
     else {
       showToast(`ปิดใช้งาน "${opt.name}" แล้ว`, 'info')
+      onRefresh()
+    }
+  }
+
+  const handleActivate = async (opt: KioskUiOption) => {
+    setActivatingId(opt.id)
+    const { error } = await onActivate(opt.id)
+    setActivatingId(null)
+    if (error) showToast(`เปิดใช้งานไม่ได้: ${error}`, 'error')
+    else {
+      showToast(`เปิดใช้งาน "${opt.name}" แล้ว`, 'success')
       onRefresh()
     }
   }
@@ -736,9 +752,20 @@ function UiSettingsModal({
                     ปิดใช้งานแล้ว — {currentGroupName}
                   </p>
                   {inactiveList.map((opt) => (
-                    <p key={opt.id} className="text-sm text-gray-400 line-through px-3">
-                      {opt.name}
-                    </p>
+                    <div
+                      key={opt.id}
+                      className="flex items-center gap-2 p-3 bg-gray-50 rounded-xl opacity-70"
+                    >
+                      <span className="flex-1 text-sm text-gray-400 line-through">{opt.name}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleActivate(opt)}
+                        disabled={activatingId === opt.id}
+                        className="text-xs font-medium text-green-600 hover:text-green-700 disabled:opacity-50"
+                      >
+                        {activatingId === opt.id ? '...' : 'เปิดใช้งาน'}
+                      </button>
+                    </div>
                   ))}
                 </div>
               )}

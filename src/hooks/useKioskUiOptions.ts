@@ -58,6 +58,15 @@ export function useKioskUiOptions() {
     return { error: error?.message ?? null }
   }
 
+  const activate = async (id: string) => {
+    const { error } = await supabase
+      .from('kiosk_ui_options')
+      .update({ is_active: true })
+      .eq('id', id)
+    if (!error) await fetchAll()
+    return { error: error?.message ?? null }
+  }
+
   return {
     allOptions,
     loading,
@@ -67,5 +76,6 @@ export function useKioskUiOptions() {
     create,
     update,
     deactivate,
+    activate,
   }
 }
