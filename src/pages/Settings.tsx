@@ -10,11 +10,14 @@ import type { ExcelCodeEntry } from '../lib/excel'
 import { DEFAULT_TEMPLATE, DEFAULT_STOCK_TEMPLATE } from '../lib/template'
 import { showToast } from '../components/Toast'
 import { ZoomImage } from '../components/ZoomImage'
+import { BarcodeScanner } from '../components/BarcodeScanner'
 import { supabase } from '../lib/supabase'
 import { useStockTemplate } from '../hooks/useAppSettings'
+import { getSimExpiringWithin30Days, formatSimExpiryDate } from '../lib/simExpiry'
+import { downloadBranchCsv } from '../lib/branchCsv'
 import type { CodeCategory, ImportResult, StoreGroup, Branch, Product } from '../types'
 
-type SettingsTab = 'general' | 'store-groups' | 'branches' | 'products' | 'import-sales'
+type SettingsTab = 'general' | 'store-groups' | 'branches' | 'products' | 'import-sales' | 'import-branches'
 
 const TABS: { id: SettingsTab; label: string; icon: string }[] = [
   { id: 'general', label: 'ทั่วไป', icon: '🎟️' },
@@ -22,9 +25,10 @@ const TABS: { id: SettingsTab; label: string; icon: string }[] = [
   { id: 'branches', label: 'สาขา', icon: '📍' },
   { id: 'products', label: 'สินค้า', icon: '📦' },
   { id: 'import-sales', label: 'นำเข้ายอดขาย', icon: '📥' },
+  { id: 'import-branches', label: 'นำเข้าข้อมูลสาขา', icon: '📋' },
 ]
 
-export function Settings() {
+export function Settings({ simExpiryCount = 0 }: { simExpiryCount?: number }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general')
 
   return (
@@ -37,9 +41,14 @@ export function Settings() {
       <div className="flex gap-1.5 bg-gray-100 p-1 rounded-2xl overflow-x-auto">
         {TABS.map((tab) => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)}
-            className={`flex-shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold transition-all
+            className={`relative flex-shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold transition-all
               ${activeTab === tab.id ? 'bg-white text-pink-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
             <span>{tab.icon}</span><span>{tab.label}</span>
+            {tab.id === 'branches' && simExpiryCount > 0 && (
+              <span className="min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1 leading-none">
+                {simExpiryCount > 99 ? '99+' : simExpiryCount}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -49,6 +58,7 @@ export function Settings() {
       {activeTab === 'branches' && <BranchesTab />}
       {activeTab === 'products' && <ProductsTab />}
       {activeTab === 'import-sales' && <ImportSalesTab />}
+      {activeTab === 'import-branches' && <ImportBranchesTab />}
     </div>
   )
 }
@@ -479,6 +489,14 @@ function StoreGroupsTab() {
 
 // ── Branches Tab ──────────────────────────────────────────────────────────────
 
+function BarcodeIcon({ className }: { className?: string }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+      <path d="M2 6h1v12H2V6zm3 0h1v12H5V6zm2 0h2v12H7V6zm3 0h1v12h-1V6zm2 0h3v12h-3V6zm4 0h1v12h-1V6zm2 0h2v12h-2V6zm3 0h1v12h-1V6z" />
+    </svg>
+  )
+}
+
 function BranchesTab() {
   const { storeGroups, branches, loading, createBranch, updateBranch, toggleBranch, deleteBranch } = useBranches()
   const [filterGroupId, setFilterGroupId] = useState('')
@@ -500,7 +518,14 @@ function BranchesTab() {
   const [editStoreGroupId, setEditStoreGroupId] = useState('')
   const [editRent, setEditRent] = useState('')
   const [editGpPercent, setEditGpPercent] = useState('')
+  const [editKioskSimPhone, setEditKioskSimPhone] = useState('')
+  const [editSimCode, setEditSimCode] = useState('')
+  const [editSimExpiryDate, setEditSimExpiryDate] = useState('')
+  const [showSimScanner, setShowSimScanner] = useState(false)
+  const [showSimExpiryAlert, setShowSimExpiryAlert] = useState(false)
   const [savingEdit, setSavingEdit] = useState(false)
+
+  const expiringSimBranches = useMemo(() => getSimExpiringWithin30Days(branches), [branches])
 
   const filteredBranches = useMemo(() => {
     return branches.filter((b) => {
@@ -528,6 +553,9 @@ function BranchesTab() {
     setEditStoreGroupId(b.store_group_id)
     setEditRent(b.rent != null ? String(b.rent) : '')
     setEditGpPercent(b.gp_percent != null ? String(b.gp_percent) : '')
+    setEditKioskSimPhone(b.kiosk_sim_phone ?? '')
+    setEditSimCode(b.sim_code ?? '')
+    setEditSimExpiryDate(b.sim_expiry_date ?? '')
   }
 
   const handleSaveEdit = async () => {
@@ -540,6 +568,9 @@ function BranchesTab() {
       store_group_id: editStoreGroupId,
       rent: editRent !== '' ? parseFloat(editRent) : null,
       gp_percent: editGpPercent !== '' ? parseFloat(editGpPercent) : null,
+      kiosk_sim_phone: editKioskSimPhone.trim() || null,
+      sim_code: editSimCode.trim() || null,
+      sim_expiry_date: editSimExpiryDate || null,
     })
     setSavingEdit(false)
     if (error) showToast(`แก้ไขไม่ได้: ${error}`, 'error')
@@ -597,7 +628,19 @@ function BranchesTab() {
       </section>
 
       <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5">
-        <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3">สาขาทั้งหมด</h2>
+        <div className="flex items-start justify-between gap-3 mb-3">
+          <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">สาขาทั้งหมด</h2>
+          <button
+            type="button"
+            onClick={() => setShowSimExpiryAlert(true)}
+            className="flex-shrink-0 px-3 py-1.5 rounded-xl text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 active:scale-95 transition-all"
+          >
+            ⚠️ แจ้งเตือน SIM ที่ใกล้หมดอายุ 30วัน
+            {expiringSimBranches.length > 0 && (
+              <span className="ml-1.5 bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded-full">{expiringSimBranches.length}</span>
+            )}
+          </button>
+        </div>
 
         {/* Filter + Search */}
         <div className="space-y-2 mb-4">
@@ -682,7 +725,7 @@ function BranchesTab() {
       {/* Edit branch modal */}
       {editingBranch && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 space-y-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 space-y-4 max-h-[90vh] overflow-y-auto">
             <h3 className="font-bold text-gray-900 text-lg">✏️ แก้ไขสาขา</h3>
             <div className="space-y-3">
               <div>
@@ -708,6 +751,30 @@ function BranchesTab() {
                 <input type="tel" value={editPhone} onChange={(e) => setEditPhone(e.target.value)}
                   className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400" />
               </div>
+              <div>
+                <label className="text-xs font-medium text-gray-500 mb-1 block">เบอร์โทร Kiosk SIM</label>
+                <input type="tel" value={editKioskSimPhone} onChange={(e) => setEditKioskSimPhone(e.target.value)}
+                  placeholder="เช่น 099-123-4567"
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-500 mb-1 block">SIM Code</label>
+                <div className="flex gap-2">
+                  <input type="text" value={editSimCode} onChange={(e) => setEditSimCode(e.target.value)}
+                    placeholder="พิมพ์หรือสแกนบาร์โค้ด"
+                    autoComplete="off"
+                    className="flex-1 border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400" />
+                  <button type="button" onClick={() => setShowSimScanner(true)}
+                    className="w-11 h-11 flex items-center justify-center rounded-xl bg-pink-100 text-pink-700 hover:bg-pink-200 transition-colors flex-shrink-0">
+                    <BarcodeIcon className="w-6 h-6" />
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-gray-500 mb-1 block">วันหมดอายุ</label>
+                <input type="date" value={editSimExpiryDate} onChange={(e) => setEditSimExpiryDate(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400" />
+              </div>
               <div className="flex gap-2">
                 <div className="flex-1">
                   <label className="text-xs font-medium text-gray-500 mb-1 block">ค่าเช่า (บาท/เดือน)</label>
@@ -731,6 +798,74 @@ function BranchesTab() {
                 {savingEdit ? 'กำลังบันทึก...' : '💾 บันทึก'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showSimScanner && (
+        <BarcodeScanner
+          onDetected={(val) => { setEditSimCode(val); setShowSimScanner(false); showToast(`สแกนได้: ${val}`, 'success') }}
+          onClose={() => setShowSimScanner(false)}
+        />
+      )}
+
+      {showSimExpiryAlert && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4 max-h-[85vh] flex flex-col">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-bold text-gray-900 text-lg">⚠️ SIM ใกล้หมดอายุ</h3>
+                <p className="text-xs text-gray-500 mt-0.5">สาขาที่หมดอายุภายใน 30 วัน — เรียงจากวันที่ใกล้หมดอายุที่สุด</p>
+              </div>
+              <button onClick={() => setShowSimExpiryAlert(false)}
+                className="text-gray-400 hover:text-gray-600 w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 flex-shrink-0">✕</button>
+            </div>
+            {expiringSimBranches.length === 0 ? (
+              <div className="text-center py-10 text-gray-400">
+                <p className="text-3xl mb-2">✅</p>
+                <p className="text-sm">ไม่มี SIM ที่ใกล้หมดอายุภายใน 30 วัน</p>
+              </div>
+            ) : (
+              <div className="space-y-2 overflow-y-auto flex-1 min-h-0">
+                {expiringSimBranches.map((b) => {
+                  const expiry = new Date(b.sim_expiry_date! + 'T00:00:00')
+                  const today = new Date()
+                  today.setHours(0, 0, 0, 0)
+                  const daysLeft = Math.ceil((expiry.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+                  const isExpired = daysLeft < 0
+                  return (
+                    <div key={b.id} className={`p-3 rounded-xl border ${isExpired ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {b.store_group && (
+                              <span className="text-xs font-semibold bg-pink-100 text-pink-600 px-1.5 py-0.5 rounded">{b.store_group.name}</span>
+                            )}
+                            <p className="font-medium text-sm text-gray-800">{b.name}</p>
+                          </div>
+                          {b.kiosk_sim_phone && (
+                            <a href={`tel:${b.kiosk_sim_phone}`} className="inline-flex items-center gap-1 text-xs text-pink-600 font-medium mt-0.5 hover:underline">
+                              📱 {b.kiosk_sim_phone}
+                            </a>
+                          )}
+                          {b.sim_code && <p className="text-xs text-gray-500 mt-0.5 font-mono">SIM: {b.sim_code}</p>}
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          <p className={`text-xs font-bold ${isExpired ? 'text-red-600' : 'text-amber-700'}`}>
+                            {formatSimExpiryDate(b.sim_expiry_date!)}
+                          </p>
+                          <p className={`text-xs mt-0.5 ${isExpired ? 'text-red-500' : 'text-amber-600'}`}>
+                            {isExpired ? `หมดอายุแล้ว ${Math.abs(daysLeft)} วัน` : `เหลือ ${daysLeft} วัน`}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            <button onClick={() => setShowSimExpiryAlert(false)}
+              className="w-full py-3 rounded-xl border border-gray-200 text-gray-600 font-medium hover:bg-gray-50 flex-shrink-0">ปิด</button>
           </div>
         </div>
       )}
@@ -1190,6 +1325,70 @@ function parseSalesExcel(
     reader.onerror = () => reject(new Error('โหลดไฟล์ไม่ได้'))
     reader.readAsArrayBuffer(file)
   })
+}
+
+function ImportBranchesTab() {
+  const { branches, loading, importBranchesFromCsv } = useBranches()
+  const [importingCsv, setImportingCsv] = useState(false)
+  const [csvFileName, setCsvFileName] = useState('')
+  const csvInputRef = useRef<HTMLInputElement>(null)
+
+  const handleExportCsv = () => {
+    if (branches.length === 0) {
+      showToast('ไม่มีข้อมูลสาขาให้ Export', 'warning')
+      return
+    }
+    const today = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+    downloadBranchCsv(branches, `branches-template_${today}.csv`)
+    showToast(`Export ${branches.length} สาขาเป็น CSV แล้ว`, 'success')
+  }
+
+  const handleCsvFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setCsvFileName(file.name)
+    setImportingCsv(true)
+    const result = await importBranchesFromCsv(file)
+    setImportingCsv(false)
+    if (csvInputRef.current) csvInputRef.current.value = ''
+
+    if (result.updated > 0 && result.errors.length === 0) {
+      showToast(`Import สำเร็จ: อัปเดต ${result.updated} สาขา`, 'success')
+    } else if (result.updated > 0) {
+      showToast(`Import บางส่วนสำเร็จ: อัปเดต ${result.updated} สาขา, ข้าม ${result.skipped} แถว`, 'warning')
+    } else if (result.errors.length > 0) {
+      showToast(result.errors[0], 'error')
+    } else {
+      showToast('ไม่มีข้อมูลที่ต้องอัปเดต', 'info')
+    }
+    setCsvFileName('')
+  }
+
+  return (
+    <div className="space-y-5">
+      <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 space-y-3">
+        <h2 className="text-sm font-semibold text-gray-600 uppercase tracking-wide">นำเข้าข้อมูลสาขา</h2>
+        <p className="text-xs text-gray-500 leading-relaxed">
+          ใช้ไฟล์ CSV เป็น template สำหรับอัปเดตข้อมูลสาขา — ต้องมีคอลัมน์ <span className="font-mono text-pink-600">id</span> เพื่อระบุสาขา
+          คอลัมน์ที่ว่างจะไม่เขียนทับข้อมูลเดิม คอลัมน์ที่มีค่าจะอัปเดตทับใน DB
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={handleExportCsv} disabled={loading || branches.length === 0}
+            className="px-4 py-2.5 rounded-xl text-sm font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 disabled:opacity-50 active:scale-95 transition-all">
+            📤 Export CSV
+          </button>
+          <label className={`px-4 py-2.5 rounded-xl text-sm font-semibold bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 active:scale-95 transition-all cursor-pointer ${importingCsv ? 'opacity-50 pointer-events-none' : ''}`}>
+            {importingCsv ? 'กำลัง Import...' : '📥 Import CSV'}
+            <input ref={csvInputRef} type="file" accept=".csv,text/csv" className="hidden" onChange={handleCsvFileChange} disabled={importingCsv} />
+          </label>
+        </div>
+        {csvFileName && <p className="text-xs text-gray-400">ไฟล์: {csvFileName}</p>}
+        <p className="text-xs text-gray-400">
+          Template ตัวอย่าง: <span className="font-mono">file/branches-template.csv</span>
+        </p>
+      </section>
+    </div>
+  )
 }
 
 function ImportSalesTab() {

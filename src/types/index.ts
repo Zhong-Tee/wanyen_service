@@ -52,6 +52,9 @@ export interface Branch {
   is_active: boolean
   rent: number | null
   gp_percent: number | null
+  kiosk_sim_phone: string | null
+  sim_code: string | null
+  sim_expiry_date: string | null
   created_at: string
   store_group?: StoreGroup
 }

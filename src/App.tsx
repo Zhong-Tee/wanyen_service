@@ -38,7 +38,7 @@ export default function App() {
         {activePage === 'report'   && <Report serviceAlertCount={counts.service} />}
         {activePage === 'printer'  && <Printer />}
         {activePage === 'changeui' && <ChangeUI />}
-        {activePage === 'settings' && <Settings />}
+        {activePage === 'settings' && <Settings simExpiryCount={counts.settings} />}
       </Layout>
       <ToastContainer toasts={toasts} onRemove={removeToast} />
     </>
