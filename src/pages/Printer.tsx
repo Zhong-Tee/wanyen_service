@@ -2,6 +2,10 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { supabase } from '../lib/supabase'
 import { fetchBranchOnlineMap } from '../lib/sheetCSV'
+import { useBranches } from '../hooks/useBranches'
+import { extractBranchNumForQueue } from '../lib/printerCommandQueue'
+import { extractBranchNum } from '../lib/printerStock'
+import type { Branch, StoreGroup } from '../types'
 import {
   DEFAULT_LOW_STOCK_THRESHOLD,
   ROWS_PER_ROLL,
@@ -99,6 +103,16 @@ function sortPrinters(printers: PrinterRecord[]): PrinterRecord[] {
   return [...printers].sort((a, b) => a.printer_id.localeCompare(b.printer_id))
 }
 
+function isPrinterNormal(p: PrinterRecord): boolean {
+  return p.status === 'online' || p.status === 'printing'
+}
+
+function filterProblemBranchGroups(groups: PrinterRecord[][]): PrinterRecord[][] {
+  return groups
+    .map((printers) => printers.filter((p) => !isPrinterNormal(p)))
+    .filter((printers) => printers.length > 0)
+}
+
 /** นาที — ถ้าสาขายังมีเครื่องที่ report อยู่ ให้ซ่อนเครื่องที่ไม่ report นานกว่านี้ (ลบออกจาก config แล้ว) */
 const STALE_PRINTER_MINUTES = 15
 
@@ -108,6 +122,43 @@ function filterActivePrinters(printers: PrinterRecord[]): PrinterRecord[] {
   const hasFresh = sorted.some((p) => minutesSince(p.timestamp) < STALE_PRINTER_MINUTES)
   if (!hasFresh) return sorted
   return sorted.filter((p) => minutesSince(p.timestamp) < STALE_PRINTER_MINUTES)
+}
+
+function buildBranchNumToStoreGroup(branches: Branch[]): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const b of branches) {
+    const num = extractBranchNumForQueue(b.name)
+    if (num) map.set(num, b.store_group_id)
+    const norm = extractBranchNum(b.name)
+    if (norm) map.set(norm, b.store_group_id)
+  }
+  return map
+}
+
+function resolveStoreGroupId(
+  branchId: string | null | undefined,
+  branchName: string,
+  lookup: Map<string, string>
+): string | undefined {
+  const keys = new Set<string>()
+  const id = branchId?.trim()
+  if (id) {
+    keys.add(id)
+    const fromId = extractBranchNumForQueue(id)
+    if (fromId) keys.add(fromId)
+    const normId = extractBranchNum(id)
+    if (normId) keys.add(normId)
+  }
+  const fromName = extractBranchNumForQueue(branchName)
+  if (fromName) keys.add(fromName)
+  const normName = extractBranchNum(branchName)
+  if (normName) keys.add(normName)
+
+  for (const key of keys) {
+    const groupId = lookup.get(key)
+    if (groupId) return groupId
+  }
+  return undefined
 }
 
 function groupByBranch(records: PrinterRecord[]): PrinterRecord[][] {
@@ -393,8 +444,17 @@ function isBranchMachineOffline(
 
 export function Printer() {
   const { data, branchOnlineMap, loading, error, lastRefresh, refresh } = usePrinterStatus()
+  const { storeGroups, branches, loading: branchLoading } = useBranches()
   const [search, setSearch] = useState('')
+  const [filterGroupId, setFilterGroupId] = useState('')
+  const [showProblemOnly, setShowProblemOnly] = useState(false)
   const [toast, setToast] = useState<Toast | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+
+  const branchNumToStoreGroup = useMemo(
+    () => buildBranchNumToStoreGroup(branches),
+    [branches]
+  )
 
   useEffect(() => {
     if (!toast) return
@@ -405,10 +465,21 @@ export function Printer() {
   // Group by branch — ซ่อนเครื่องที่ไม่ได้ report แล้ว (เช่น ลบออกจาก config)
   const activeBranchGroups = useMemo(() => groupByBranch(data), [data])
 
-  const branchGroups = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return activeBranchGroups
+  const groupFilteredBranchGroups = useMemo(() => {
+    if (!filterGroupId) return activeBranchGroups
     return activeBranchGroups.filter((printers) => {
+      const branch = printers[0]
+      return (
+        resolveStoreGroupId(branch.branch_id, branch.branch_name, branchNumToStoreGroup) ===
+        filterGroupId
+      )
+    })
+  }, [activeBranchGroups, filterGroupId, branchNumToStoreGroup])
+
+  const searchedBranchGroups = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return groupFilteredBranchGroups
+    return groupFilteredBranchGroups.filter((printers) => {
       const branch = printers[0]
       return (
         branch.branch_name.toLowerCase().includes(q) ||
@@ -416,14 +487,31 @@ export function Printer() {
         printers.some((p) => p.printer_name.toLowerCase().includes(q))
       )
     })
-  }, [activeBranchGroups, search])
+  }, [groupFilteredBranchGroups, search])
 
-  // Summary counts (นับเฉพาะเครื่องที่ยัง active)
+  const branchGroups = useMemo(() => {
+    if (!showProblemOnly) return searchedBranchGroups
+    return filterProblemBranchGroups(searchedBranchGroups)
+  }, [searchedBranchGroups, showProblemOnly])
+
+  const toggleProblemFilter = useCallback(() => {
+    setShowProblemOnly((v) => {
+      const next = !v
+      if (next) {
+        requestAnimationFrame(() => {
+          listRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        })
+      }
+      return next
+    })
+  }, [])
+
+  // Summary counts (นับเฉพาะเครื่องที่ยัง active — ตามตัวกรองประเภทร้าน)
   const summary = useMemo(() => {
-    const active = activeBranchGroups.flat()
+    const active = groupFilteredBranchGroups.flat()
     const total = active.length
-    const normal = active.filter((r) => r.status === 'online' || r.status === 'printing').length
-    const problem = active.filter((r) => r.status !== 'online' && r.status !== 'printing').length
+    const normal = active.filter(isPrinterNormal).length
+    const problem = active.filter((r) => !isPrinterNormal(r)).length
     const monitorOffline = active.filter(
       (r) => getMonitorHealth(minutesSince(r.timestamp)) === 'offline'
     ).length
@@ -433,7 +521,7 @@ export function Printer() {
         .map((r) => r.branch_id)
     ).size
     return { total, normal, problem, monitorOffline, machineOffline }
-  }, [activeBranchGroups, branchOnlineMap])
+  }, [groupFilteredBranchGroups, branchOnlineMap])
 
   return (
     <div className="space-y-4">
@@ -478,9 +566,23 @@ export function Printer() {
             <p className="text-xl font-bold text-green-700 mt-1">{summary.normal}</p>
             <p className="text-xs text-green-600 mt-0.5">ปกติ</p>
           </div>
-          <div
-            className={`rounded-xl p-3 text-center border ${
-              summary.problem > 0 ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'
+          <button
+            type="button"
+            onClick={toggleProblemFilter}
+            disabled={summary.problem === 0}
+            title={
+              summary.problem > 0
+                ? showProblemOnly
+                  ? 'แสดงรายการทั้งหมด'
+                  : 'แสดงเฉพาะปริ้นเตอร์ที่มีปัญหา'
+                : 'ไม่มีปริ้นเตอร์ที่มีปัญหา'
+            }
+            className={`rounded-xl p-3 text-center border transition-all active:scale-[0.98] ${
+              summary.problem > 0
+                ? showProblemOnly
+                  ? 'bg-red-100 border-red-400 ring-2 ring-red-300 shadow-sm'
+                  : 'bg-red-50 border-red-200 hover:bg-red-100 cursor-pointer'
+                : 'bg-gray-50 border-gray-200 cursor-default opacity-60'
             }`}
           >
             <p className="text-xl">⚠️</p>
@@ -497,8 +599,11 @@ export function Printer() {
               }`}
             >
               มีปัญหา
+              {showProblemOnly && summary.problem > 0 && (
+                <span className="block text-[10px] font-semibold mt-0.5">กำลังกรอง ✓</span>
+              )}
             </p>
-          </div>
+          </button>
           <div
             className={`rounded-xl p-3 text-center border ${
               summary.monitorOffline > 0
@@ -545,6 +650,53 @@ export function Printer() {
         </div>
       )}
 
+      {/* Store group filter */}
+      {activeBranchGroups.length > 0 && !branchLoading && storeGroups.length > 0 && (
+        <div>
+          <label className="text-xs font-medium text-gray-500 mb-2 block">ประเภทร้าน</label>
+          <div className="flex gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setFilterGroupId('')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all active:scale-95
+                ${!filterGroupId ? 'bg-pink-600 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            >
+              ทั้งหมด
+            </button>
+            {storeGroups.map((sg: StoreGroup) => (
+              <button
+                key={sg.id}
+                type="button"
+                onClick={() => setFilterGroupId(sg.id === filterGroupId ? '' : sg.id)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all active:scale-95
+                  ${filterGroupId === sg.id ? 'bg-pink-600 text-white shadow-sm' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+              >
+                {sg.name}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Problem filter banner */}
+      {showProblemOnly && summary.problem > 0 && (
+        <div className="flex items-center justify-between gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-2.5">
+          <p className="text-sm text-red-800">
+            <span className="font-semibold">แสดงเฉพาะปริ้นเตอร์ที่มีปัญหา</span>
+            <span className="text-red-600 ml-1">
+              · {branchGroups.length} สาขา · {summary.problem} เครื่อง
+            </span>
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowProblemOnly(false)}
+            className="text-xs font-semibold text-red-700 bg-white border border-red-200 px-2.5 py-1 rounded-lg hover:bg-red-100 flex-shrink-0"
+          >
+            แสดงทั้งหมด
+          </button>
+        </div>
+      )}
+
       {/* Search */}
       {activeBranchGroups.length > 0 && (
         <div className="relative">
@@ -586,25 +738,50 @@ export function Printer() {
         </div>
       )}
 
-      {/* No search results */}
-      {!loading && search && branchGroups.length === 0 && activeBranchGroups.length > 0 && (
+      {/* No filter / search results */}
+      {!loading &&
+        branchGroups.length === 0 &&
+        activeBranchGroups.length > 0 &&
+        (search || filterGroupId || showProblemOnly) && (
         <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center">
-          <p className="text-3xl mb-2">🔍</p>
-          <p className="text-gray-400 text-sm">ไม่พบสาขาที่ค้นหา</p>
+          <p className="text-3xl mb-2">{showProblemOnly ? '✅' : search ? '🔍' : '🏪'}</p>
+          <p className="text-gray-400 text-sm">
+            {showProblemOnly
+              ? search
+                ? 'ไม่พบปริ้นเตอร์ที่มีปัญหาตามคำค้นหา'
+                : filterGroupId
+                ? `ไม่มีปริ้นเตอร์ที่มีปัญหาในประเภท ${storeGroups.find((g) => g.id === filterGroupId)?.name ?? ''}`
+                : 'ไม่มีปริ้นเตอร์ที่มีปัญหาในขณะนี้'
+              : search
+              ? 'ไม่พบสาขาที่ค้นหา'
+              : `ไม่มีสาขาในประเภท ${storeGroups.find((g) => g.id === filterGroupId)?.name ?? ''}`}
+          </p>
+          {showProblemOnly && (
+            <button
+              type="button"
+              onClick={() => setShowProblemOnly(false)}
+              className="mt-3 text-xs font-semibold text-pink-600 hover:text-pink-700"
+            >
+              แสดงรายการทั้งหมด
+            </button>
+          )}
         </div>
       )}
 
       {/* Branch cards */}
       {!loading && branchGroups.length > 0 && (
-        <div className="space-y-3">
+        <div ref={listRef} className="space-y-3">
           {branchGroups.map((printers) => {
             const branch = printers[0]
+            const groupName = storeGroups.find(
+              (g) =>
+                g.id ===
+                resolveStoreGroupId(branch.branch_id, branch.branch_name, branchNumToStoreGroup)
+            )?.name
             const maxMins = Math.max(...printers.map((p) => minutesSince(p.timestamp)))
             const monitorHealth = getMonitorHealth(maxMins)
             const machineOffline = isBranchMachineOffline(branch.branch_id, branchOnlineMap)
-            const hasProblem = printers.some(
-              (p) => p.status !== 'online' && p.status !== 'printing'
-            )
+            const hasProblem = printers.some((p) => !isPrinterNormal(p))
 
             return (
               <section
@@ -632,6 +809,11 @@ export function Printer() {
                   }`}
                 >
                   <div className="flex items-center gap-2 min-w-0">
+                    {groupName && (
+                      <span className="flex-shrink-0 text-xs font-bold bg-purple-600 text-white px-2 py-0.5 rounded">
+                        {groupName}
+                      </span>
+                    )}
                     <span className="flex-shrink-0 text-xs font-bold bg-pink-600 text-white px-2 py-0.5 rounded">
                       {branch.branch_id ?? '—'}
                     </span>
@@ -655,7 +837,11 @@ export function Printer() {
                         ⏱ ช้ากว่าปกติ
                       </span>
                     )}
-                    <span className="text-xs text-gray-400">{printers.length} เครื่อง</span>
+                    <span className="text-xs text-gray-400">
+                      {showProblemOnly
+                        ? `${printers.length} เครื่องมีปัญหา`
+                        : `${printers.length} เครื่อง`}
+                    </span>
                   </div>
                 </div>
 

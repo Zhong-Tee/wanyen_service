@@ -27,7 +27,7 @@
     {
       "id": "printer_01",
       "name": "ปริ้นเตอร์ 1",
-      "ip": "192.168.31.111",
+      "ip": "192.168.1.111",
       "snmp_community": "public",
       "product_name": "ชื่อสินค้าให้ตรงกับในระบบ",
       "sticker": {
@@ -41,7 +41,7 @@
     {
       "id": "printer_02",
       "name": "ปริ้นเตอร์ 2",
-      "ip": "192.168.31.112",
+      "ip": "192.168.1.112",
       "snmp_community": "public",
       "product_name": "ชื่อสินค้าให้ตรงกับในระบบ",
       "sticker": {

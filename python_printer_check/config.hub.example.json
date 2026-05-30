@@ -75,9 +75,9 @@
     "_comment": "Hub ส่วนใหญ่ไม่ต้องตั้ง — คำสั่ง changeui รันที่เครื่องสาขาที่มี st_sticker",
     "_comment2": "ใส่ path เฉพาะเมื่อ Hub เป็นสาขานี้และมี kiosk บนเครื่องเดียวกัน",
     "_comment3": "โฟลเดอร์ UI ใน ui_rebuild_dir ต้องชื่อตรงชื่อสินค้า เช่น B2S-S2 — path ใช้ / ไม่ใช่ \\",
-    "app_dir": "",
+    "app_dir": "C:/ST/app_cust_V.6",
     "exe_name": "st_sticker.exe",
-    "ui_rebuild_dir": "",
+    "ui_rebuild_dir": "C:/ST/UI",
     "close_timeout_sec": 10,
     "start_timeout_sec": 15
   }
