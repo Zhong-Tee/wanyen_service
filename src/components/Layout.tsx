@@ -28,6 +28,7 @@ function getBadge(page: Page, badges?: BadgeCounts): number {
   if (page === 'job') return badges.job
   if (page === 'delivery') return badges.delivery
   if (page === 'report') return badges.service
+  if (page === 'printer') return badges.printer
   return 0
 }
 

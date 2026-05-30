@@ -5,6 +5,16 @@ import { fetchBranchOnlineMap } from '../lib/sheetCSV'
 import { useBranches } from '../hooks/useBranches'
 import { extractBranchNumForQueue } from '../lib/printerCommandQueue'
 import { extractBranchNum } from '../lib/printerStock'
+import {
+  countPrinterAlertSummary,
+  fetchLatestPrinterRecords,
+  getMonitorHealth,
+  groupByBranch,
+  isPrinterNormal,
+  minutesSince,
+  type PrinterLatestRecord,
+  type PrinterStatusKey,
+} from '../lib/printerAlerts'
 import type { Branch, StoreGroup } from '../types'
 import {
   DEFAULT_LOW_STOCK_THRESHOLD,
@@ -14,23 +24,7 @@ import {
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type PrinterStatusKey = 'online' | 'printing' | 'offline' | 'paper_out' | 'ribbon_out' | 'error'
-
-interface PrinterRecord {
-  id: number
-  branch_id: string
-  branch_name: string
-  printer_id: string
-  printer_name: string
-  printer_ip: string
-  status: PrinterStatusKey
-  status_label: string | null
-  page_count: number | null
-  alert_msg: string | null
-  event: string | null
-  stock_remaining: number | null
-  timestamp: string
-}
+type PrinterRecord = PrinterLatestRecord
 
 /** ชื่อสถานะภาษาอังกฤษ default ตามประเภท (เมื่อยังไม่มี log ใหม่) */
 const ENGLISH_STATUS_LABELS: Record<PrinterStatusKey, string> = {
@@ -66,16 +60,6 @@ const STATUS_CONFIG: Record<PrinterStatusKey, { label: string; icon: string; col
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function minutesSince(timestamp: string): number {
-  return (Date.now() - new Date(timestamp).getTime()) / 60000
-}
-
-function getMonitorHealth(minutes: number): 'ok' | 'warning' | 'offline' {
-  if (minutes < 6) return 'ok'
-  if (minutes < 15) return 'warning'
-  return 'offline'
-}
-
 function formatRelativeTime(timestamp: string): string {
   const mins = minutesSince(timestamp)
   if (mins < 1) return 'เมื่อกี้'
@@ -103,25 +87,24 @@ function sortPrinters(printers: PrinterRecord[]): PrinterRecord[] {
   return [...printers].sort((a, b) => a.printer_id.localeCompare(b.printer_id))
 }
 
-function isPrinterNormal(p: PrinterRecord): boolean {
-  return p.status === 'online' || p.status === 'printing'
-}
-
 function filterProblemBranchGroups(groups: PrinterRecord[][]): PrinterRecord[][] {
   return groups
     .map((printers) => printers.filter((p) => !isPrinterNormal(p)))
     .filter((printers) => printers.length > 0)
 }
 
-/** นาที — ถ้าสาขายังมีเครื่องที่ report อยู่ ให้ซ่อนเครื่องที่ไม่ report นานกว่านี้ (ลบออกจาก config แล้ว) */
-const STALE_PRINTER_MINUTES = 15
-
-function filterActivePrinters(printers: PrinterRecord[]): PrinterRecord[] {
-  if (printers.length <= 1) return sortPrinters(printers)
-  const sorted = sortPrinters(printers)
-  const hasFresh = sorted.some((p) => minutesSince(p.timestamp) < STALE_PRINTER_MINUTES)
-  if (!hasFresh) return sorted
-  return sorted.filter((p) => minutesSince(p.timestamp) < STALE_PRINTER_MINUTES)
+function filterMonitorOfflineBranchGroups(
+  groups: PrinterRecord[][],
+  branchOnlineMap: Map<string, 'online' | 'offline'>
+): PrinterRecord[][] {
+  return groups.filter((printers) => {
+    const branch = printers[0]
+    const maxMins = Math.max(...printers.map((p) => minutesSince(p.timestamp)))
+    return (
+      getMonitorHealth(maxMins) === 'offline' &&
+      !isBranchMachineOffline(branch.branch_id, branchOnlineMap)
+    )
+  })
 }
 
 function buildBranchNumToStoreGroup(branches: Branch[]): Map<string, string> {
@@ -159,19 +142,6 @@ function resolveStoreGroupId(
     if (groupId) return groupId
   }
   return undefined
-}
-
-function groupByBranch(records: PrinterRecord[]): PrinterRecord[][] {
-  const map = new Map<string, PrinterRecord[]>()
-  records.forEach((r) => {
-    const key = r.branch_id ?? r.branch_name
-    if (!map.has(key)) map.set(key, [])
-    map.get(key)!.push(r)
-  })
-  return Array.from(map.values())
-    .map((printers) => filterActivePrinters(printers))
-    .filter((printers) => printers.length > 0)
-    .sort((a, b) => a[0].branch_name.localeCompare(b[0].branch_name, 'th'))
 }
 
 // ── Printer Command Menu (ต่อแถวปริ้นเตอร์) ─────────────────────────────────
@@ -373,50 +343,16 @@ function usePrinterStatus() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
+  const [clockTick, setClockTick] = useState(0)
 
   const refresh = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const colsWithLabel =
-        'id, branch_id, branch_name, printer_id, printer_name, printer_ip, status, status_label, page_count, alert_msg, event, stock_remaining, timestamp'
-      const colsLegacy =
-        'id, branch_id, branch_name, printer_id, printer_name, printer_ip, status, page_count, alert_msg, event, stock_remaining, timestamp'
-
-      const fetchLogs = () =>
-        supabase.from('printer_log').select(colsWithLabel).order('timestamp', { ascending: false }).limit(2000)
-
-      const onlineMapPromise = fetchBranchOnlineMap().catch(
-        () => new Map<string, 'online' | 'offline'>()
-      )
-
-      const withLabel = await fetchLogs()
-      let rows: PrinterRecord[] | null
-      if (withLabel.error?.message?.includes('status_label')) {
-        const legacy = await supabase
-          .from('printer_log')
-          .select(colsLegacy)
-          .order('timestamp', { ascending: false })
-          .limit(2000)
-        if (legacy.error) throw legacy.error
-        rows = (legacy.data ?? []).map((r) => ({ ...r, status_label: null }))
-      } else {
-        if (withLabel.error) throw withLabel.error
-        rows = withLabel.data
-      }
-
-      const onlineMap = await onlineMapPromise
-
-      // เก็บแค่ record แรก (ล่าสุด) ของแต่ละ branch_id + printer_id คู่กัน
-      // (ทุกสาขาใช้ชื่อ printer_id ซ้ำกัน เช่น printer_01 ต้องแยกด้วย branch_id)
-      const seen = new Set<string>()
-      const latest = (rows ?? []).filter((r) => {
-        const key = `${r.branch_id}__${r.printer_id}`
-        if (seen.has(key)) return false
-        seen.add(key)
-        return true
-      })
-
+      const [latest, onlineMap] = await Promise.all([
+        fetchLatestPrinterRecords(),
+        fetchBranchOnlineMap().catch(() => new Map<string, 'online' | 'offline'>()),
+      ])
       setData(latest)
       setBranchOnlineMap(onlineMap)
       setLastRefresh(new Date())
@@ -429,7 +365,21 @@ function usePrinterStatus() {
 
   useEffect(() => { refresh() }, [refresh])
 
-  return { data, branchOnlineMap, loading, error, lastRefresh, refresh }
+  useEffect(() => {
+    const channel = supabase
+      .channel('printer-dashboard')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'printer_log' }, () => refresh())
+      .subscribe()
+
+    return () => { supabase.removeChannel(channel) }
+  }, [refresh])
+
+  useEffect(() => {
+    const tick = setInterval(() => setClockTick((n) => n + 1), 60_000)
+    return () => clearInterval(tick)
+  }, [])
+
+  return { data, branchOnlineMap, loading, error, lastRefresh, refresh, clockTick }
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
@@ -443,11 +393,12 @@ function isBranchMachineOffline(
 }
 
 export function Printer() {
-  const { data, branchOnlineMap, loading, error, lastRefresh, refresh } = usePrinterStatus()
+  const { data, branchOnlineMap, loading, error, lastRefresh, refresh, clockTick } = usePrinterStatus()
   const { storeGroups, branches, loading: branchLoading } = useBranches()
   const [search, setSearch] = useState('')
   const [filterGroupId, setFilterGroupId] = useState('')
   const [showProblemOnly, setShowProblemOnly] = useState(false)
+  const [showMonitorOfflineOnly, setShowMonitorOfflineOnly] = useState(false)
   const [toast, setToast] = useState<Toast | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -490,38 +441,50 @@ export function Printer() {
   }, [groupFilteredBranchGroups, search])
 
   const branchGroups = useMemo(() => {
-    if (!showProblemOnly) return searchedBranchGroups
-    return filterProblemBranchGroups(searchedBranchGroups)
-  }, [searchedBranchGroups, showProblemOnly])
+    if (showProblemOnly) return filterProblemBranchGroups(searchedBranchGroups)
+    if (showMonitorOfflineOnly) {
+      return filterMonitorOfflineBranchGroups(searchedBranchGroups, branchOnlineMap)
+    }
+    return searchedBranchGroups
+  }, [searchedBranchGroups, showProblemOnly, showMonitorOfflineOnly, branchOnlineMap])
 
-  const toggleProblemFilter = useCallback(() => {
-    setShowProblemOnly((v) => {
-      const next = !v
-      if (next) {
-        requestAnimationFrame(() => {
-          listRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-        })
-      }
-      return next
+  const scrollToList = useCallback(() => {
+    requestAnimationFrame(() => {
+      listRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
     })
   }, [])
+
+  const toggleProblemFilter = useCallback(() => {
+    setShowMonitorOfflineOnly(false)
+    setShowProblemOnly((v) => {
+      const next = !v
+      if (next) scrollToList()
+      return next
+    })
+  }, [scrollToList])
+
+  const toggleMonitorOfflineFilter = useCallback(() => {
+    setShowProblemOnly(false)
+    setShowMonitorOfflineOnly((v) => {
+      const next = !v
+      if (next) scrollToList()
+      return next
+    })
+  }, [scrollToList])
 
   // Summary counts (นับเฉพาะเครื่องที่ยัง active — ตามตัวกรองประเภทร้าน)
   const summary = useMemo(() => {
     const active = groupFilteredBranchGroups.flat()
     const total = active.length
     const normal = active.filter(isPrinterNormal).length
-    const problem = active.filter((r) => !isPrinterNormal(r)).length
-    const monitorOffline = active.filter(
-      (r) => getMonitorHealth(minutesSince(r.timestamp)) === 'offline'
-    ).length
+    const { problem, monitorOffline } = countPrinterAlertSummary(active)
     const machineOffline = new Set(
       active
         .filter((r) => isBranchMachineOffline(r.branch_id, branchOnlineMap))
         .map((r) => r.branch_id)
     ).size
     return { total, normal, problem, monitorOffline, machineOffline }
-  }, [groupFilteredBranchGroups, branchOnlineMap])
+  }, [groupFilteredBranchGroups, branchOnlineMap, clockTick])
 
   return (
     <div className="space-y-4">
@@ -604,11 +567,23 @@ export function Printer() {
               )}
             </p>
           </button>
-          <div
-            className={`rounded-xl p-3 text-center border ${
+          <button
+            type="button"
+            onClick={toggleMonitorOfflineFilter}
+            disabled={summary.monitorOffline === 0}
+            title={
               summary.monitorOffline > 0
-                ? 'bg-orange-50 border-orange-200'
-                : 'bg-gray-50 border-gray-200'
+                ? showMonitorOfflineOnly
+                  ? 'แสดงรายการทั้งหมด'
+                  : 'แสดงเฉพาะสาขาที่ Monitor ไม่ตอบ'
+                : 'ไม่มี Monitor ที่ไม่ตอบ'
+            }
+            className={`rounded-xl p-3 text-center border transition-all active:scale-[0.98] ${
+              summary.monitorOffline > 0
+                ? showMonitorOfflineOnly
+                  ? 'bg-orange-100 border-orange-400 ring-2 ring-orange-300 shadow-sm'
+                  : 'bg-orange-50 border-orange-200 hover:bg-orange-100 cursor-pointer'
+                : 'bg-gray-50 border-gray-200 cursor-default opacity-60'
             }`}
           >
             <p className="text-xl">📡</p>
@@ -625,8 +600,11 @@ export function Printer() {
               }`}
             >
               Monitor ไม่ตอบ
+              {showMonitorOfflineOnly && summary.monitorOffline > 0 && (
+                <span className="block text-[10px] font-semibold mt-0.5">กำลังกรอง ✓</span>
+              )}
             </p>
-          </div>
+          </button>
         </div>
       )}
 
@@ -697,6 +675,25 @@ export function Printer() {
         </div>
       )}
 
+      {/* Monitor offline filter banner */}
+      {showMonitorOfflineOnly && summary.monitorOffline > 0 && (
+        <div className="flex items-center justify-between gap-2 bg-orange-50 border border-orange-200 rounded-xl px-4 py-2.5">
+          <p className="text-sm text-orange-800">
+            <span className="font-semibold">แสดงเฉพาะสาขาที่ Monitor ไม่ตอบ</span>
+            <span className="text-orange-600 ml-1">
+              · {branchGroups.length} สาขา · {summary.monitorOffline} เครื่อง
+            </span>
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowMonitorOfflineOnly(false)}
+            className="text-xs font-semibold text-orange-700 bg-white border border-orange-200 px-2.5 py-1 rounded-lg hover:bg-orange-100 flex-shrink-0"
+          >
+            แสดงทั้งหมด
+          </button>
+        </div>
+      )}
+
       {/* Search */}
       {activeBranchGroups.length > 0 && (
         <div className="relative">
@@ -742,9 +739,11 @@ export function Printer() {
       {!loading &&
         branchGroups.length === 0 &&
         activeBranchGroups.length > 0 &&
-        (search || filterGroupId || showProblemOnly) && (
+        (search || filterGroupId || showProblemOnly || showMonitorOfflineOnly) && (
         <div className="bg-white rounded-2xl border border-gray-100 p-8 text-center">
-          <p className="text-3xl mb-2">{showProblemOnly ? '✅' : search ? '🔍' : '🏪'}</p>
+          <p className="text-3xl mb-2">
+            {showProblemOnly ? '✅' : showMonitorOfflineOnly ? '📡' : search ? '🔍' : '🏪'}
+          </p>
           <p className="text-gray-400 text-sm">
             {showProblemOnly
               ? search
@@ -752,14 +751,23 @@ export function Printer() {
                 : filterGroupId
                 ? `ไม่มีปริ้นเตอร์ที่มีปัญหาในประเภท ${storeGroups.find((g) => g.id === filterGroupId)?.name ?? ''}`
                 : 'ไม่มีปริ้นเตอร์ที่มีปัญหาในขณะนี้'
+              : showMonitorOfflineOnly
+              ? search
+                ? 'ไม่พบสาขาที่ Monitor ไม่ตอบตามคำค้นหา'
+                : filterGroupId
+                ? `ไม่มีสาขาที่ Monitor ไม่ตอบในประเภท ${storeGroups.find((g) => g.id === filterGroupId)?.name ?? ''}`
+                : 'ไม่มีสาขาที่ Monitor ไม่ตอบในขณะนี้'
               : search
               ? 'ไม่พบสาขาที่ค้นหา'
               : `ไม่มีสาขาในประเภท ${storeGroups.find((g) => g.id === filterGroupId)?.name ?? ''}`}
           </p>
-          {showProblemOnly && (
+          {(showProblemOnly || showMonitorOfflineOnly) && (
             <button
               type="button"
-              onClick={() => setShowProblemOnly(false)}
+              onClick={() => {
+                setShowProblemOnly(false)
+                setShowMonitorOfflineOnly(false)
+              }}
               className="mt-3 text-xs font-semibold text-pink-600 hover:text-pink-700"
             >
               แสดงรายการทั้งหมด

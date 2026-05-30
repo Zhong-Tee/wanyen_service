@@ -1184,6 +1184,7 @@ class PrinterWorker:
         self.alert_cooldown_sec     = alert_cfg.get("cooldown_minutes", 30) * 60
 
         self.last_status    = None   # สถานะที่ยืนยันแล้ว
+        self.had_error      = False  # เคยแจ้ง error — รอ Ready ก่อนส่ง recovery
         self.offline_count  = 0      # นับ offline ติดกัน
         self.last_log_time  = 0.0
         self.last_alert_times = {}   # status → timestamp สำหรับ cooldown
@@ -1248,12 +1249,14 @@ class PrinterWorker:
         if effective_status != self.last_status:
             if is_error:
                 # Critical alert — ส่งทันที ไม่มี cooldown ตอนเปลี่ยนสถานะใหม่
+                self.had_error = True
                 self._send_alert(effective_status, page_count, alert_msg, remaining,
                                  status_label=status_label)
                 self._mark_alerted(effective_status)
                 self._log(info, "error", remaining, status=effective_status)
-            elif self.last_status is not None:
-                # กลับมาปกติ — แจ้งเสมอ ไม่มี cooldown
+            elif (self.had_error and effective_status == STATUS_ONLINE):
+                # แก้ปัญหาแล้ว — แจ้งเฉพาะตอน Ready (ไม่แจ้งตอน Printing)
+                self.had_error = False
                 self._send_recovered(page_count, remaining, status_label=status_label)
                 self._log(info, "recovered", remaining)
             self.last_status = effective_status
