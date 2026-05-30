@@ -5,7 +5,7 @@ import { useProducts } from '../hooks/useProducts'
 import { showToast } from '../components/Toast'
 import { BarcodeScanner } from '../components/BarcodeScanner'
 import { countDeliveriesByStatus, deliveryTabBadge } from '../lib/deliveryCounts'
-import type { Delivery, DeliveryStatus, Product } from '../types'
+import type { Delivery, DeliveryStatus, Product, Branch } from '../types'
 
 const STATUS_ORDER: DeliveryStatus[] = ['ต้องจัดส่ง', 'จัดส่งแล้ว', 'ได้รับแล้ว']
 
@@ -55,7 +55,7 @@ interface DeliveryPageProps {
 }
 
 export function DeliveryPage({ onAction }: DeliveryPageProps) {
-  const { deliveries, loading, createDelivery, updateStatus, updateTracking, updateDeliveryItems } = useDeliveries()
+  const { deliveries, loading, createDelivery, updateStatus, updateTracking, updateToBranch, updateDeliveryItems, deleteDelivery } = useDeliveries()
   const { activeBranches: branches } = useBranches()
   const { products } = useProducts()
 
@@ -80,6 +80,14 @@ export function DeliveryPage({ onAction }: DeliveryPageProps) {
   const [editItemsDraft, setEditItemsDraft] = useState<DeliveryItemForm[]>([])
   const [editProductSearch, setEditProductSearch] = useState('')
   const [savingItemsId, setSavingItemsId] = useState<string | null>(null)
+
+  const [editBranchId, setEditBranchId] = useState<string | null>(null)
+  const [branchDraft, setBranchDraft] = useState('')
+  const [editBranchSearch, setEditBranchSearch] = useState('')
+  const [savingBranchId, setSavingBranchId] = useState<string | null>(null)
+
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   // Barcode scanner for create form
   const [showScanner, setShowScanner] = useState(false)
@@ -157,6 +165,31 @@ export function DeliveryPage({ onAction }: DeliveryPageProps) {
     setSavingItemsId(null)
     if (error) showToast(`บันทึกไม่ได้: ${error}`, 'error')
     else { showToast('บันทึกรายการสินค้าแล้ว', 'success'); setEditItemsId(null) }
+  }
+
+  const openBranchEdit = (delivery: Delivery) => {
+    setEditBranchId(delivery.id)
+    setBranchDraft(delivery.to_branch_id)
+    setEditBranchSearch('')
+  }
+
+  const handleSaveBranch = async (deliveryId: string) => {
+    if (!branchDraft) { showToast('กรุณาเลือกสาขาปลายทาง', 'warning'); return }
+    setSavingBranchId(deliveryId)
+    const { error } = await updateToBranch(deliveryId, branchDraft)
+    setSavingBranchId(null)
+    if (error) showToast(`บันทึกไม่ได้: ${error}`, 'error')
+    else { showToast('บันทึกสาขาปลายทางแล้ว', 'success'); setEditBranchId(null) }
+  }
+
+  const handleDelete = async (delivery: Delivery) => {
+    if (confirmDeleteId !== delivery.id) { setConfirmDeleteId(delivery.id); return }
+    setDeletingId(delivery.id)
+    setConfirmDeleteId(null)
+    const { error } = await deleteDelivery(delivery.id)
+    setDeletingId(null)
+    if (error) showToast(`ลบไม่ได้: ${error}`, 'error')
+    else { showToast('ลบรายการจัดส่งแล้ว', 'info'); onAction?.() }
   }
 
   const selectedProductIds = useMemo(
@@ -353,6 +386,7 @@ export function DeliveryPage({ onAction }: DeliveryPageProps) {
             <DeliveryCard
               key={d.id}
               delivery={d}
+              branches={branches}
               products={products}
               updatingId={updatingId}
               editTrackingId={editTrackingId}
@@ -362,6 +396,12 @@ export function DeliveryPage({ onAction }: DeliveryPageProps) {
               editItemsDraft={editItemsDraft}
               editProductSearch={editProductSearch}
               savingItemsId={savingItemsId}
+              editBranchId={editBranchId}
+              branchDraft={branchDraft}
+              editBranchSearch={editBranchSearch}
+              savingBranchId={savingBranchId}
+              confirmDeleteId={confirmDeleteId}
+              deletingId={deletingId}
               onNextStatus={handleNextStatus}
               onOpenTracking={openTrackingEdit}
               onSaveTracking={handleSaveTracking}
@@ -374,6 +414,12 @@ export function DeliveryPage({ onAction }: DeliveryPageProps) {
               onEditItemsChange={setEditItemsDraft}
               onEditProductSearchChange={setEditProductSearch}
               onUpdateEditItem={updateEditItem}
+              onOpenBranchEdit={openBranchEdit}
+              onSaveBranch={handleSaveBranch}
+              onCancelBranchEdit={() => setEditBranchId(null)}
+              onBranchDraftChange={setBranchDraft}
+              onEditBranchSearchChange={setEditBranchSearch}
+              onDelete={handleDelete}
               statusStyles={STATUS_STYLES}
               nextStatus={STATUS_NEXT}
             />
@@ -386,6 +432,7 @@ export function DeliveryPage({ onAction }: DeliveryPageProps) {
 
 interface DeliveryCardProps {
   delivery: Delivery
+  branches: Branch[]
   products: Product[]
   updatingId: string | null
   editTrackingId: string | null
@@ -395,6 +442,12 @@ interface DeliveryCardProps {
   editItemsDraft: DeliveryItemForm[]
   editProductSearch: string
   savingItemsId: string | null
+  editBranchId: string | null
+  branchDraft: string
+  editBranchSearch: string
+  savingBranchId: string | null
+  confirmDeleteId: string | null
+  deletingId: string | null
   onNextStatus: (d: Delivery) => void
   onOpenTracking: (d: Delivery) => void
   onSaveTracking: (id: string) => void
@@ -407,6 +460,12 @@ interface DeliveryCardProps {
   onEditItemsChange: (items: DeliveryItemForm[]) => void
   onEditProductSearchChange: (v: string) => void
   onUpdateEditItem: (idx: number, field: keyof DeliveryItemForm, value: string | number) => void
+  onOpenBranchEdit: (d: Delivery) => void
+  onSaveBranch: (id: string) => void
+  onCancelBranchEdit: () => void
+  onBranchDraftChange: (v: string) => void
+  onEditBranchSearchChange: (v: string) => void
+  onDelete: (d: Delivery) => void
   statusStyles: Record<DeliveryStatus, string>
   nextStatus: Record<DeliveryStatus, DeliveryStatus | null>
 }
@@ -416,10 +475,13 @@ function formatDate(iso: string) {
 }
 
 function DeliveryCard({
-  delivery: d, products, updatingId, editTrackingId, trackingDraft, trackingInputRef,
+  delivery: d, branches, products, updatingId, editTrackingId, trackingDraft, trackingInputRef,
   editItemsId, editItemsDraft, editProductSearch, savingItemsId,
+  editBranchId, branchDraft, editBranchSearch, savingBranchId,
+  confirmDeleteId, deletingId,
   onNextStatus, onOpenTracking, onSaveTracking, onTrackingChange, onCancelTracking, onScanTracking,
   onOpenItemsEdit, onSaveItems, onCancelItemsEdit, onEditItemsChange, onEditProductSearchChange, onUpdateEditItem,
+  onOpenBranchEdit, onSaveBranch, onCancelBranchEdit, onBranchDraftChange, onEditBranchSearchChange, onDelete,
   statusStyles, nextStatus,
 }: DeliveryCardProps) {
   const next = nextStatus[d.status]
@@ -427,8 +489,17 @@ function DeliveryCard({
   const isEditingTracking = editTrackingId === d.id
   const isEditingItems = editItemsId === d.id
   const isSavingItems = savingItemsId === d.id
-  const canEditItems = d.status !== 'ได้รับแล้ว'
+  const isEditingBranch = editBranchId === d.id
+  const isSavingBranch = savingBranchId === d.id
+  const isDeleting = deletingId === d.id
+  const canEdit = d.status !== 'ได้รับแล้ว'
   const editSelectedProductIds = editItemsDraft.map((i) => i.product_id).filter(Boolean)
+
+  const filteredBranches = branches.filter((b) =>
+    editBranchSearch.trim() === '' ||
+    b.name.toLowerCase().includes(editBranchSearch.toLowerCase()) ||
+    (b.store_group?.name ?? '').toLowerCase().includes(editBranchSearch.toLowerCase()),
+  )
 
   return (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 space-y-3">
@@ -439,9 +510,50 @@ function DeliveryCard({
               {d.status}
             </span>
           </div>
-          <p className="font-semibold text-gray-800 mt-1">
-            → {d.branch?.store_group ? `${d.branch.store_group.name} · ` : ''}{d.branch?.name ?? '—'}
-          </p>
+          {isEditingBranch ? (
+            <div className="mt-2 space-y-2 bg-gray-50 rounded-xl p-3 border border-gray-100">
+              <span className="text-xs font-semibold text-gray-600">แก้ไขสาขาปลายทาง</span>
+              <div className="relative">
+                <input
+                  type="text" value={editBranchSearch} onChange={(e) => onEditBranchSearchChange(e.target.value)}
+                  placeholder="ค้นหาชื่อสาขา..."
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400 bg-white"
+                />
+                {editBranchSearch && (
+                  <button onClick={() => onEditBranchSearchChange('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 w-5 h-5 flex items-center justify-center rounded-full hover:bg-gray-100 text-xs">✕</button>
+                )}
+              </div>
+              <select value={branchDraft} onChange={(e) => onBranchDraftChange(e.target.value)}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-pink-400 bg-white">
+                <option value="">— เลือกสาขา —</option>
+                {filteredBranches.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.store_group?.name ? `${b.store_group.name} · ` : ''}{b.name}
+                  </option>
+                ))}
+              </select>
+              <div className="flex gap-2 pt-1">
+                <button onClick={() => onSaveBranch(d.id)} disabled={isSavingBranch}
+                  className="flex-1 py-2 bg-pink-600 text-white rounded-xl text-xs font-bold hover:bg-pink-700 disabled:opacity-50">
+                  {isSavingBranch ? 'กำลังบันทึก...' : 'บันทึก'}
+                </button>
+                <button onClick={onCancelBranchEdit}
+                  className="px-4 py-2 text-gray-400 text-xs border border-gray-200 rounded-xl hover:bg-gray-50 bg-white">ยกเลิก</button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 mt-1">
+              <p className="font-semibold text-gray-800">
+                → {d.branch?.store_group ? `${d.branch.store_group.name} · ` : ''}{d.branch?.name ?? '—'}
+              </p>
+              {canEdit && (
+                <button onClick={() => onOpenBranchEdit(d)}
+                  className="text-xs text-pink-600 hover:text-pink-700 font-medium flex-shrink-0">
+                  ✏️
+                </button>
+              )}
+            </div>
+          )}
           {/* Date timeline */}
           <div className="mt-2 flex flex-col gap-1">
             <div className="flex items-center gap-1.5 text-xs text-gray-400">
@@ -465,6 +577,13 @@ function DeliveryCard({
             )}
           </div>
         </div>
+        {canEdit && (
+          <button onClick={() => onDelete(d)} disabled={isDeleting}
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all flex-shrink-0
+              ${confirmDeleteId === d.id ? 'bg-red-500 text-white animate-pulse' : 'bg-red-50 text-red-400 hover:bg-red-100'}`}>
+            {isDeleting ? '...' : confirmDeleteId === d.id ? 'ยืนยัน?' : 'ลบ'}
+          </button>
+        )}
       </div>
 
       {isEditingItems ? (
@@ -515,7 +634,7 @@ function DeliveryCard({
         </div>
       ) : d.items && d.items.length > 0 ? (
         <div className="space-y-1">
-          {canEditItems && (
+          {canEdit && (
             <div className="flex justify-end">
               <button onClick={() => onOpenItemsEdit(d)}
                 className="text-xs text-pink-600 hover:text-pink-700 font-medium">
@@ -533,7 +652,7 @@ function DeliveryCard({
             </div>
           ))}
         </div>
-      ) : canEditItems ? (
+      ) : canEdit ? (
         <button onClick={() => onOpenItemsEdit(d)}
           className="text-xs text-gray-400 hover:text-pink-600 border border-dashed border-gray-200 rounded-xl py-2 w-full">
           + เพิ่มรายการสินค้า

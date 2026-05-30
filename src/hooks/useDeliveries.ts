@@ -86,6 +86,12 @@ export function useDeliveries() {
     return { error: error?.message ?? null }
   }
 
+  const updateToBranch = async (id: string, to_branch_id: string) => {
+    const { error } = await supabase.from('deliveries').update({ to_branch_id }).eq('id', id)
+    if (!error) fetchAll()
+    return { error: error?.message ?? null }
+  }
+
   const updateDeliveryItems = async (
     deliveryId: string,
     items: { product_id: string; quantity: number }[],
@@ -109,5 +115,5 @@ export function useDeliveries() {
     return { error: error?.message ?? null }
   }
 
-  return { deliveries, loading, refresh: fetchAll, createDelivery, updateStatus, updateTracking, updateDeliveryItems, deleteDelivery }
+  return { deliveries, loading, refresh: fetchAll, createDelivery, updateStatus, updateTracking, updateToBranch, updateDeliveryItems, deleteDelivery }
 }
